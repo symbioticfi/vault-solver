@@ -64,7 +64,8 @@ func MatchInventories(
 			offer.Discount.Cmp(base.AdapterMinDiscount) < 0 {
 			issues = append(issues, OfferIssue{
 				DiscountID: offer.DiscountID.Hex(),
-				Err:        errors.New("advertised discount is below current adapter minimum"),
+				Err: errors.Errorf("advertised discount is below current adapter minimum: discountPpm=%s minDiscountPpm=%v",
+					offer.Discount, base.AdapterMinDiscount),
 			})
 			continue
 		}
@@ -72,7 +73,7 @@ func MatchInventories(
 		if maxRate.Sign() <= 0 {
 			issues = append(issues, OfferIssue{
 				DiscountID: offer.DiscountID.Hex(),
-				Err:        errors.New("current adapter oracle price is unavailable"),
+				Err:        errors.Errorf("current adapter oracle price %v is unavailable", base.Price),
 			})
 			continue
 		}
@@ -117,7 +118,8 @@ func AdvertisedFillQuotes(
 		if base.MinDiscount == nil || base.MinDiscount.Sign() < 0 || offer.Discount.Cmp(base.MinDiscount) < 0 {
 			issues = append(issues, OfferIssue{
 				DiscountID: offer.DiscountID.Hex(),
-				Err:        errors.New("advertised discount is below current adapter minimum"),
+				Err: errors.Errorf("advertised discount is below current adapter minimum: discountPpm=%s minDiscountPpm=%v",
+					offer.Discount, base.MinDiscount),
 			})
 			continue
 		}

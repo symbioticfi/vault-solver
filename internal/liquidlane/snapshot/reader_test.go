@@ -24,7 +24,7 @@ func (f *fakeLiquidReader) ResolveRoutes(context.Context, []common.Address) ([]l
 	return f.routes, nil
 }
 
-func (f *fakeLiquidReader) ReadInventory(context.Context, []liquidlane.Route) ([]liquidlane.Inventory, error) {
+func (f *fakeLiquidReader) ReadInventory(context.Context, []liquidlane.Route, ...liquidlane.DropTrace) ([]liquidlane.Inventory, error) {
 	return f.inventory, nil
 }
 
@@ -32,6 +32,7 @@ func (f *fakeLiquidReader) FilterAuthorized(
 	_ context.Context,
 	inventory []liquidlane.Inventory,
 	_ common.Address,
+	_ ...liquidlane.DropTrace,
 ) ([]liquidlane.Inventory, error) {
 	allowed := make(map[liquidlane.RouteID]bool, len(f.authorized))
 	for _, route := range f.authorized {
@@ -51,6 +52,7 @@ func (f *fakeLiquidReader) ReadFillQuotes(
 	[]liquidlane.Route,
 	common.Address,
 	*big.Int,
+	...liquidlane.DropTrace,
 ) ([]liquidlane.FillQuote, error) {
 	return f.quotes, nil
 }
@@ -59,11 +61,12 @@ func (f *fakeLiquidReader) FilterAuthorizedRoutes(
 	context.Context,
 	[]liquidlane.Route,
 	common.Address,
+	...liquidlane.DropTrace,
 ) ([]liquidlane.Route, error) {
 	return f.authorized, nil
 }
 
-func (f *fakeLiquidReader) ReadGasSnapshot(context.Context, []liquidlane.Route) (*liquidlanegas.Snapshot, error) {
+func (f *fakeLiquidReader) ReadGasSnapshot(context.Context, []liquidlane.Route, ...liquidlane.DropTrace) (*liquidlanegas.Snapshot, error) {
 	f.gasReads++
 	return f.gas, nil
 }

@@ -43,13 +43,15 @@ func ValidateSigned(
 	}
 	if base.GrossAmountOut == nil || base.GrossAmountOut.Sign() <= 0 ||
 		base.MinDiscount == nil || base.MinDiscount.Sign() < 0 {
-		return nil, errors.New("resolved discount has no current on-chain quote")
+		return nil, errors.Errorf("resolved discount has no current on-chain quote: grossAmountOut=%v minDiscountPpm=%v",
+			base.GrossAmountOut, base.MinDiscount)
 	}
 	if signed.Terms.Discount == nil {
 		return nil, errors.New("resolved discount is missing discount terms")
 	}
 	if signed.Terms.Discount.Cmp(base.MinDiscount) < 0 {
-		return nil, errors.New("resolved discount is below the adapter minimum")
+		return nil, errors.Errorf("resolved discount is below the adapter minimum: discountPpm=%s minDiscountPpm=%s",
+			signed.Terms.Discount, base.MinDiscount)
 	}
 	amountOut := liquidlane.AmountOutAfterDiscount(base.GrossAmountOut, signed.Terms.Discount)
 	if selection.MinAmountOut != nil && amountOut.Cmp(selection.MinAmountOut) < 0 {
@@ -69,17 +71,19 @@ func ValidateSelection(signed *Signed, selection Selection, validAfter time.Time
 		return errors.New("resolved discount is nil")
 	}
 	if signed.DiscountID != selection.DiscountID {
-		return errors.New("resolved discount id does not match selected route")
+		return errors.Errorf("resolved discount id %s does not match selected %s", signed.DiscountID.Hex(), selection.DiscountID.Hex())
 	}
 	if signed.Adapter != selection.Adapter || signed.Terms.TokenToRedeem != selection.TokenIn {
-		return errors.New("resolved discount route does not match selected route")
+		return errors.Errorf("resolved discount route %s/%s does not match selected route %s/%s",
+			signed.Adapter.Hex(), signed.Terms.TokenToRedeem.Hex(), selection.Adapter.Hex(), selection.TokenIn.Hex())
 	}
 	if signed.Terms.Deadline == nil || signed.ProtocolDeadline == nil {
 		return errors.New("resolved discount is missing deadlines")
 	}
 	cutoff := big.NewInt(validAfter.Unix())
 	if signed.Terms.Deadline.Cmp(cutoff) <= 0 || signed.ProtocolDeadline.Cmp(cutoff) <= 0 {
-		return errors.New("resolved discount expires before the execution safety window")
+		return errors.Errorf("resolved discount expires before the execution safety window: deadline=%s protocolDeadline=%s validAfter=%s",
+			signed.Terms.Deadline, signed.ProtocolDeadline, cutoff)
 	}
 	return nil
 }
@@ -135,7 +139,8 @@ func ResolveSelected(
 		selection.AmountIn,
 	)
 	if !ok {
-		return nil, errors.New("resolved discount has no current on-chain quote")
+		return nil, errors.Errorf("resolved discount has no current on-chain quote for adapter %s tokenIn %s tokenOut %s amountIn %v",
+			selection.Adapter.Hex(), selection.TokenIn.Hex(), selection.TokenOut.Hex(), selection.AmountIn)
 	}
 	return ResolveAndValidate(ctx, provider, selection, base, validAfter)
 }

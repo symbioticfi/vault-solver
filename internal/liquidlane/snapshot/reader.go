@@ -32,24 +32,29 @@ type Fill struct {
 
 type liquidReader interface {
 	ResolveRoutes(ctx context.Context, adapters []common.Address) ([]liquidlane.Route, error)
-	ReadInventory(ctx context.Context, routes []liquidlane.Route) ([]liquidlane.Inventory, error)
+	ReadInventory(ctx context.Context, routes []liquidlane.Route, trace ...liquidlane.DropTrace) ([]liquidlane.Inventory, error)
 	FilterAuthorized(
 		ctx context.Context,
 		inventory []liquidlane.Inventory,
 		filler common.Address,
+		trace ...liquidlane.DropTrace,
 	) ([]liquidlane.Inventory, error)
 	ReadFillQuotes(
 		ctx context.Context,
 		routes []liquidlane.Route,
 		tokenIn common.Address,
 		amountIn *big.Int,
+		trace ...liquidlane.DropTrace,
 	) ([]liquidlane.FillQuote, error)
 	FilterAuthorizedRoutes(
 		ctx context.Context,
 		routes []liquidlane.Route,
 		filler common.Address,
+		trace ...liquidlane.DropTrace,
 	) ([]liquidlane.Route, error)
-	ReadGasSnapshot(ctx context.Context, routes []liquidlane.Route) (*liquidlanegas.Snapshot, error)
+	ReadGasSnapshot(
+		ctx context.Context, routes []liquidlane.Route, trace ...liquidlane.DropTrace,
+	) (*liquidlanegas.Snapshot, error)
 }
 
 type gasReader interface {
@@ -113,8 +118,9 @@ func (r *Reader) FilterAuthorizedRoutes(
 	ctx context.Context,
 	routes []liquidlane.Route,
 	executor common.Address,
+	trace ...liquidlane.DropTrace,
 ) ([]liquidlane.Route, error) {
-	return r.liquid.FilterAuthorizedRoutes(ctx, routes, executor)
+	return r.liquid.FilterAuthorizedRoutes(ctx, routes, executor, trace...)
 }
 
 // ReadFillQuotes reads amount-specific physical quotes without direct-route authorization or gas state.
@@ -123,41 +129,48 @@ func (r *Reader) ReadFillQuotes(
 	routes []liquidlane.Route,
 	tokenIn common.Address,
 	amountIn *big.Int,
+	trace ...liquidlane.DropTrace,
 ) ([]liquidlane.FillQuote, error) {
-	return r.liquid.ReadFillQuotes(ctx, routes, tokenIn, amountIn)
+	return r.liquid.ReadFillQuotes(ctx, routes, tokenIn, amountIn, trace...)
 }
 
+// Quote reads inventory, its authorized direct subset and gas state. Every route a read leaves out,
+// including physical routes not authorized for direct use, goes to trace.
 func (r *Reader) Quote(
 	ctx context.Context,
 	routes []liquidlane.Route,
 	executor common.Address,
+	trace ...liquidlane.DropTrace,
 ) (Quote, error) {
-	physical, err := r.liquid.ReadInventory(ctx, routes)
+	physical, err := r.liquid.ReadInventory(ctx, routes, trace...)
 	if err != nil {
 		return Quote{}, err
 	}
-	direct, err := r.liquid.FilterAuthorized(ctx, physical, executor)
+	direct, err := r.liquid.FilterAuthorized(ctx, physical, executor, trace...)
 	if err != nil {
 		return Quote{}, err
 	}
-	gasSnapshot, prices, err := r.readGas(ctx, routes)
+	gasSnapshot, prices, err := r.readGas(ctx, routes, trace)
 	if err != nil {
 		return Quote{}, err
 	}
 	return Quote{Direct: direct, Physical: physical, GasSnapshot: gasSnapshot, GasPrices: prices}, nil
 }
 
+// Fill reads amount-specific quotes, their authorized direct subset and gas state. Every route a read
+// leaves out, including routes not authorized for direct use, goes to trace.
 func (r *Reader) Fill(
 	ctx context.Context,
 	routes []liquidlane.Route,
 	executor, tokenIn common.Address,
 	amountIn *big.Int,
+	trace ...liquidlane.DropTrace,
 ) (Fill, error) {
-	physical, err := r.liquid.ReadFillQuotes(ctx, routes, tokenIn, amountIn)
+	physical, err := r.liquid.ReadFillQuotes(ctx, routes, tokenIn, amountIn, trace...)
 	if err != nil {
 		return Fill{}, err
 	}
-	authorized, err := r.liquid.FilterAuthorizedRoutes(ctx, routes, executor)
+	authorized, err := r.liquid.FilterAuthorizedRoutes(ctx, routes, executor, trace...)
 	if err != nil {
 		return Fill{}, err
 	}
@@ -171,7 +184,7 @@ func (r *Reader) Fill(
 			direct = append(direct, quote)
 		}
 	}
-	gasSnapshot, prices, err := r.readGas(ctx, routes)
+	gasSnapshot, prices, err := r.readGas(ctx, routes, trace)
 	if err != nil {
 		return Fill{}, err
 	}
@@ -181,11 +194,12 @@ func (r *Reader) Fill(
 func (r *Reader) readGas(
 	ctx context.Context,
 	routes []liquidlane.Route,
+	trace []liquidlane.DropTrace,
 ) (*liquidlanegas.Snapshot, *liquidlanegas.PriceSnapshot, error) {
 	if r.gas == nil {
 		return nil, nil, nil
 	}
-	snapshot, err := r.liquid.ReadGasSnapshot(ctx, routes)
+	snapshot, err := r.liquid.ReadGasSnapshot(ctx, routes, trace...)
 	if err != nil {
 		return nil, nil, err
 	}

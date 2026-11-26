@@ -18,6 +18,9 @@ const maxOracleDecimals = 36
 
 var chainlinkFeed = aggregator.NewAggregatorV3()
 
+// feedReverts names Error(string) and Panic reverts; the aggregator ABI declares no custom errors.
+var feedReverts = chain.NewRevertDecoder()
+
 type OracleConfig struct {
 	NativeUSDFeed USDFeed
 	TokenUSDFeeds map[common.Address]USDFeed
@@ -193,8 +196,13 @@ func appendFeedCalls(calls []chain.Call, feed common.Address) []chain.Call {
 }
 
 func decodeFeed(results []chain.CallResult, feed common.Address, blockTime time.Time, maxAge time.Duration) (feedPrice, error) {
-	if len(results) != 2 || !results[0].Success || !results[1].Success {
-		return feedPrice{}, errors.Errorf("gas oracle: feed %s call failed", feed.Hex())
+	if len(results) != 2 {
+		return feedPrice{}, errors.Errorf("gas oracle: feed %s: got %d results, want 2", feed.Hex(), len(results))
+	}
+	for i, method := range []string{"latestRoundData", "decimals"} {
+		if !results[i].Success {
+			return feedPrice{}, errors.Errorf("gas oracle: feed %s %s reverted: %s", feed.Hex(), method, feedReverts.Describe(results[i].ReturnData))
+		}
 	}
 	round, err := chainlinkFeed.UnpackLatestRoundData(results[0].ReturnData)
 	if err != nil {

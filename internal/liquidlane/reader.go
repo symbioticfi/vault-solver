@@ -2,6 +2,7 @@ package liquidlane
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -14,7 +15,6 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/vaultv2"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
-	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 const (
@@ -96,17 +96,18 @@ func (r *Reader) TokenMetadata() *chain.Decimals {
 }
 
 func (r *Reader) ResolveAdapters(ctx context.Context, adapters []common.Address) ([]Adapter, error) {
-	return r.resolveAdapters(ctx, adapters, false)
+	return r.resolveAdapters(ctx, adapters, nil)
 }
 
 // DiscoverAdapters resolves unconfigured identities in batches. Invalid contract
 // metadata skips only that adapter so it can retry on a later discovery poll;
-// transport or malformed aggregate responses still fail the refresh.
-func (r *Reader) DiscoverAdapters(ctx context.Context, adapters []common.Address) ([]Adapter, error) {
-	return r.resolveAdapters(ctx, adapters, true)
+// transport or malformed aggregate responses still fail the refresh. Each skipped adapter goes to trace.
+func (r *Reader) DiscoverAdapters(ctx context.Context, adapters []common.Address, trace ...DropTrace) ([]Adapter, error) {
+	return r.resolveAdapters(ctx, adapters, dropSink(ctx, trace))
 }
 
-func (r *Reader) resolveAdapters(ctx context.Context, adapters []common.Address, discover bool) ([]Adapter, error) {
+// resolveAdapters fails on the first invalid adapter unless skip is set, which then receives it.
+func (r *Reader) resolveAdapters(ctx context.Context, adapters []common.Address, skip DropTrace) ([]Adapter, error) {
 	adapters = dedupeAddresses(adapters)
 	if len(adapters) == 0 {
 		return nil, nil
@@ -127,10 +128,10 @@ func (r *Reader) resolveAdapters(ctx context.Context, adapters []common.Address,
 	for i, adapter := range adapters {
 		vault, vaultErr := resolveAdapterVault(adapter, vaultResults[i])
 		if vaultErr != nil {
-			if !discover {
+			if skip == nil {
 				return nil, vaultErr
 			}
-			observability.Log(ctx).V(1).Info("skipping unresolved adapter", "adapter", adapter.Hex(), "error", vaultErr.Error())
+			skip(Drop{Adapter: adapter, Reason: vaultErr.Error()})
 			continue
 		}
 		resolved = append(resolved, Adapter{Adapter: adapter, Vault: vault})
@@ -150,10 +151,10 @@ func (r *Reader) resolveAdapters(ctx context.Context, adapters []common.Address,
 	for i, adapter := range resolved {
 		metadata, metadataErr := r.resolveAdapterAsset(ctx, adapter, assetResults[i])
 		if metadataErr != nil {
-			if !discover {
+			if skip == nil {
 				return nil, metadataErr
 			}
-			observability.Log(ctx).V(1).Info("skipping unresolved adapter", "adapter", adapter.Adapter.Hex(), "error", metadataErr.Error())
+			skip(Drop{Adapter: adapter.Adapter, Reason: metadataErr.Error()})
 			continue
 		}
 		out = append(out, metadata)
@@ -163,7 +164,7 @@ func (r *Reader) resolveAdapters(ctx context.Context, adapters []common.Address,
 
 func resolveAdapterVault(adapter common.Address, result chain.CallResult) (common.Address, error) {
 	if !result.Success {
-		return common.Address{}, errors.Errorf("liquidlane: resolve adapter %s vault: call failed", adapter.Hex())
+		return common.Address{}, errors.Errorf("liquidlane: resolve adapter %s %s", adapter.Hex(), callFailure("vault", result))
 	}
 	vault, err := llAdapter.UnpackVault(result.ReturnData)
 	if err != nil {
@@ -177,7 +178,8 @@ func resolveAdapterVault(adapter common.Address, result chain.CallResult) (commo
 
 func (r *Reader) resolveAdapterAsset(ctx context.Context, adapter Adapter, result chain.CallResult) (Adapter, error) {
 	if !result.Success {
-		return Adapter{}, errors.Errorf("liquidlane: resolve adapter %s vault %s asset: call failed", adapter.Adapter.Hex(), adapter.Vault.Hex())
+		return Adapter{}, errors.Errorf("liquidlane: resolve adapter %s vault %s %s",
+			adapter.Adapter.Hex(), adapter.Vault.Hex(), callFailure("asset", result))
 	}
 	asset, err := erc4626b.UnpackAsset(result.ReturnData)
 	if err != nil {
@@ -237,9 +239,9 @@ func (r *Reader) ResolveRoutes(ctx context.Context, adapters []common.Address) (
 		resolvedAdapter := resolved[req.adapterIndex]
 		if !call.Success {
 			return nil, errors.Errorf(
-				"liquidlane: resolve adapter %s tokensToRedeem[%d]: call failed",
+				"liquidlane: resolve adapter %s %s",
 				resolvedAdapter.Adapter.Hex(),
-				req.tokenIndex,
+				callFailure(fmt.Sprintf("tokensToRedeem(%d)", req.tokenIndex), call),
 			)
 		}
 		tokenIn, unpackErr := llAdapter.UnpackTokensToRedeem(call.ReturnData)
@@ -267,7 +269,8 @@ func (r *Reader) ResolveRoutes(ctx context.Context, adapters []common.Address) (
 	return compactRoutes(routes), nil
 }
 
-func (r *Reader) RoutesForToken(ctx context.Context, adapters []Adapter, tokenIn common.Address) []Route {
+// RoutesForToken resolves tokenIn on each adapter; each unresolved route is logged and goes to trace.
+func (r *Reader) RoutesForToken(ctx context.Context, adapters []Adapter, tokenIn common.Address, trace ...DropTrace) []Route {
 	out := make([]Route, 0, len(adapters))
 	for _, a := range dedupeAdapters(adapters) {
 		route, err := r.resolveRouteForToken(ctx, a, tokenIn)
@@ -276,6 +279,9 @@ func (r *Reader) RoutesForToken(ctx context.Context, adapters []Adapter, tokenIn
 				"adapter", a.Adapter.Hex(),
 				"tokenIn", tokenIn.Hex(),
 			)
+			if len(trace) > 0 { // Already logged above, so no V(1) fallback.
+				dropSink(ctx, trace)(Drop{Adapter: a.Adapter, TokenIn: tokenIn, Reason: err.Error()})
+			}
 			continue
 		}
 		out = append(out, route)
@@ -283,8 +289,8 @@ func (r *Reader) RoutesForToken(ctx context.Context, adapters []Adapter, tokenIn
 	return compactRoutes(out)
 }
 
-// readPaused returns current pause state for each successfully decoded adapter.
-func (r *Reader) readPaused(ctx context.Context, adapters []common.Address) (map[common.Address]bool, error) {
+// readPaused returns current pause state for each successfully decoded adapter; drop gets the rest.
+func (r *Reader) readPaused(ctx context.Context, adapters []common.Address, drop DropTrace) (map[common.Address]bool, error) {
 	adapters = dedupeAddresses(adapters)
 	if len(adapters) == 0 {
 		return nil, nil
@@ -302,22 +308,22 @@ func (r *Reader) readPaused(ctx context.Context, adapters []common.Address) (map
 	}
 	out := make(map[common.Address]bool, len(adapters))
 	for i, result := range results {
-		if !result.Success {
+		paused, reason := decodeCall("paused", result, llAdapter.UnpackPaused)
+		if reason != "" {
+			drop(Drop{Adapter: adapters[i], Reason: reason})
 			continue
 		}
-		paused, unpackErr := llAdapter.UnpackPaused(result.ReturnData)
-		if unpackErr == nil {
-			out[adapters[i]] = paused
-		}
+		out[adapters[i]] = paused
 	}
 	return out, nil
 }
 
-func (r *Reader) ReadInventory(ctx context.Context, routes []Route) ([]Inventory, error) {
-	return r.readInventory(ctx, routes, false)
+// ReadInventory reads executable inventory for routes; each route left out goes to trace.
+func (r *Reader) ReadInventory(ctx context.Context, routes []Route, trace ...DropTrace) ([]Inventory, error) {
+	return r.readInventory(ctx, routes, false, dropSink(ctx, trace))
 }
 
-func (r *Reader) readInventory(ctx context.Context, routes []Route, keepZero bool) ([]Inventory, error) {
+func (r *Reader) readInventory(ctx context.Context, routes []Route, keepZero bool, drop DropTrace) ([]Inventory, error) {
 	routes = compactRoutes(routes)
 	if len(routes) == 0 {
 		return nil, nil
@@ -336,7 +342,7 @@ func (r *Reader) readInventory(ctx context.Context, routes []Route, keepZero boo
 			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackGetAmountOut(route.TokenIn, probe)},
 		)
 	}
-	res, err := r.inventoryCalls(ctx, routes, calls)
+	res, lensFailures, err := r.inventoryCalls(ctx, routes, calls)
 	if err != nil {
 		return nil, err
 	}
@@ -346,41 +352,67 @@ func (r *Reader) readInventory(ctx context.Context, routes []Route, keepZero boo
 	out := make([]Inventory, 0, len(routes))
 	for i, route := range routes {
 		base := i * inventoryReadsPerRoute
-		paused, maxAssetsRes, maxRateRes, minDiscountRes := res[base], res[base+1], res[base+2], res[base+3]
-		priceRes := res[base+4]
-		if !unpaused(paused) {
+		inventory, reason := r.inventoryItem(route, res[base:base+inventoryReadsPerRoute], lensFailures[base+1], keepZero)
+		if reason != "" {
+			drop(Drop{Adapter: route.Adapter, TokenIn: route.TokenIn, Reason: reason})
 			continue
 		}
-		if !maxAssetsRes.Success || !maxRateRes.Success || !minDiscountRes.Success {
-			continue
-		}
-		maxAssets, aerr := llAdapter.UnpackGetMaxAssets(maxAssetsRes.ReturnData)
-		maxRate, rerr := llAdapter.UnpackGetMaxRate(maxRateRes.ReturnData)
-		minDiscount, derr := llAdapter.UnpackMinDiscount(minDiscountRes.ReturnData)
-		if aerr != nil || rerr != nil || derr != nil || maxAssets == nil || maxRate == nil || minDiscount == nil ||
-			minDiscount.Sign() < 0 || minDiscount.Cmp(big.NewInt(DiscountPrecision)) > 0 {
-			continue
-		}
-		if !keepZero && (maxAssets.Sign() <= 0 || maxRate.Sign() <= 0) {
-			continue
-		}
-		price, ok := r.oraclePrice(route, priceRes, maxRate, minDiscount)
-		if !ok {
-			continue
-		}
-		inventory := DirectInventory(route, maxAssets, maxRate)
-		inventory.AdapterMinDiscount = CloneBig(minDiscount)
-		inventory.Price = price
 		out = append(out, inventory)
 	}
 	return out, nil
 }
 
+// inventoryItem decodes one route's inventory reads, or names the check that drops the route.
+func (r *Reader) inventoryItem(route Route, res []chain.CallResult, lensFailure string, keepZero bool) (Inventory, string) {
+	if reason := pauseReason(res[0]); reason != "" {
+		return Inventory{}, reason
+	}
+	if lensFailure != "" {
+		return Inventory{}, lensFailure
+	}
+	maxAssets, reason := decodeCall("getMaxAssets", res[1], llAdapter.UnpackGetMaxAssets)
+	if reason != "" {
+		return Inventory{}, reason
+	}
+	maxRate, reason := decodeCall("getMaxRate", res[2], llAdapter.UnpackGetMaxRate)
+	if reason != "" {
+		return Inventory{}, reason
+	}
+	minDiscount, reason := decodeCall("minDiscount", res[3], llAdapter.UnpackMinDiscount)
+	if reason != "" {
+		return Inventory{}, reason
+	}
+	if maxAssets == nil || maxRate == nil {
+		return Inventory{}, "getMaxAssets or getMaxRate returned no value"
+	}
+	if reason = minDiscountReason(minDiscount); reason != "" {
+		return Inventory{}, reason
+	}
+	if !keepZero && maxAssets.Sign() <= 0 {
+		return Inventory{}, "getMaxAssets " + maxAssets.String() + " is not positive"
+	}
+	if !keepZero && maxRate.Sign() <= 0 {
+		return Inventory{}, "getMaxRate " + maxRate.String() + " is not positive"
+	}
+	price, reason := r.oraclePrice(route, res[4], maxRate, minDiscount)
+	if reason != "" {
+		return Inventory{}, reason
+	}
+	inventory := DirectInventory(route, maxAssets, maxRate)
+	inventory.AdapterMinDiscount = CloneBig(minDiscount)
+	inventory.Price = price
+	return inventory, ""
+}
+
 // inventoryCalls keeps capacity calculation in the lens and reads all inventory in one latest
-// Multicall. Each adapter's token batch performs the shared sweep/cascade only once.
-func (r *Reader) inventoryCalls(ctx context.Context, routes []Route, calls []chain.Call) ([]chain.CallResult, error) {
+// Multicall. Each adapter's token batch performs the shared sweep/cascade only once. Capacity slots
+// the lens could not fill are keyed in the returned map with the reason.
+func (r *Reader) inventoryCalls(
+	ctx context.Context, routes []Route, calls []chain.Call,
+) ([]chain.CallResult, map[int]string, error) {
 	if r.lens == (common.Address{}) {
-		return r.chain.Multicall(ctx, calls)
+		results, err := r.chain.Multicall(ctx, calls)
+		return results, nil, err
 	}
 	type lensBatch struct {
 		adapter common.Address
@@ -414,46 +446,49 @@ func (r *Reader) inventoryCalls(ctx context.Context, routes []Route, calls []cha
 	}
 	results, err := r.chain.Multicall(ctx, batchCalls)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(results) != len(batchCalls) {
-		return nil, errors.Errorf("liquidlane: inventory lens multicall: got %d results, want %d", len(results), len(batchCalls))
+		return nil, nil, errors.Errorf("liquidlane: inventory lens multicall: got %d results, want %d", len(results), len(batchCalls))
 	}
 	out := make([]chain.CallResult, len(calls))
 	for i, slot := range slots {
 		out[slot] = results[len(batches)+i]
 	}
+	failures := make(map[int]string)
 	for i, batch := range batches {
-		if !results[i].Success {
-			continue
+		capacities, reason := decodeCall("lens getMaxAssetsBatch", results[i], lensB.UnpackGetMaxAssetsBatch)
+		if reason == "" && len(capacities) != len(batch.tokens) {
+			reason = fmt.Sprintf("lens getMaxAssetsBatch returned %d capacities for %d tokens", len(capacities), len(batch.tokens))
 		}
-		capacities, unpackErr := lensB.UnpackGetMaxAssetsBatch(results[i].ReturnData)
-		if unpackErr != nil || len(capacities) != len(batch.tokens) {
-			continue
-		}
-		for j, capacity := range capacities {
-			if capacity.Success && capacity.MaxAssets != nil {
-				out[batch.slots[j]] = chain.CallResult{Success: true, ReturnData: capacity.MaxAssets.FillBytes(make([]byte, 32))}
+		for j, slot := range batch.slots {
+			switch {
+			case reason != "":
+				failures[slot] = reason
+			case !capacities[j].Success || capacities[j].MaxAssets == nil:
+				failures[slot] = "lens getMaxAssetsBatch: getMaxAssets failed inside the lens"
+			default:
+				out[slot] = chain.CallResult{Success: true, ReturnData: capacities[j].MaxAssets.FillBytes(make([]byte, 32))}
 			}
 		}
 	}
-	return out, nil
+	return out, failures, nil
 }
 
 // oraclePrice decodes the oracle price read through getAmountOut at the price probe. getMaxRate
 // derives from the same price in the same block, so a mismatch means the adapter no longer pays
-// like DiscountedAmountOut and the route fails closed. A nil price with ok leaves the route on
-// rate-based pricing when its decimals cannot express the probe.
-func (r *Reader) oraclePrice(route Route, result chain.CallResult, maxRate, minDiscount *big.Int) (*big.Int, bool) {
+// like DiscountedAmountOut and the route fails closed. A nil price with no reason leaves the route
+// on rate-based pricing when its decimals cannot express the probe.
+func (r *Reader) oraclePrice(route Route, result chain.CallResult, maxRate, minDiscount *big.Int) (*big.Int, string) {
 	if _, ok := OraclePriceProbe(route.TokenInDecimals, route.TokenOutDecimals); !ok {
-		return nil, true
+		return nil, ""
 	}
-	if !result.Success {
-		return nil, false
+	price, reason := decodeCall("getAmountOut(price probe)", result, llAdapter.UnpackGetAmountOut)
+	if reason != "" {
+		return nil, reason
 	}
-	price, err := llAdapter.UnpackGetAmountOut(result.ReturnData)
-	if err != nil || price == nil || price.Sign() <= 0 {
-		return nil, false
+	if price == nil || price.Sign() <= 0 {
+		return nil, fmt.Sprintf("oracle price %v is not positive", price)
 	}
 	if expected := DiscountedRate(price, minDiscount); expected.Cmp(maxRate) != 0 {
 		r.log.Error(errors.New("adapter max rate does not match its oracle price"), "liquidlane: route skipped",
@@ -464,14 +499,20 @@ func (r *Reader) oraclePrice(route Route, result chain.CallResult, maxRate, minD
 			"maxRate", maxRate.String(),
 			"expectedMaxRate", expected.String(),
 		)
-		return nil, false
+		return nil, fmt.Sprintf("getMaxRate %s does not match oracle price %s at minDiscount %s (expected %s)",
+			maxRate, price, minDiscount, expected)
 	}
-	return price, true
+	return price, ""
 }
 
 // ReadGasSnapshot returns the latest adapter-local acquire balances and shared vault liquidity needed
-// to predict LiquidLane swap gas. Partially unread state remains absent and is priced as RouteUnknown.
-func (r *Reader) ReadGasSnapshot(ctx context.Context, routes []Route) (*liquidlanegas.Snapshot, error) {
+// to predict LiquidLane swap gas. Partially unread state remains absent and is priced as RouteUnknown;
+// each unread piece goes to trace.
+func (r *Reader) ReadGasSnapshot(ctx context.Context, routes []Route, trace ...DropTrace) (*liquidlanegas.Snapshot, error) {
+	return r.readGasSnapshot(ctx, routes, dropSink(ctx, trace))
+}
+
+func (r *Reader) readGasSnapshot(ctx context.Context, routes []Route, drop DropTrace) (*liquidlanegas.Snapshot, error) {
 	routes = compactRoutes(routes)
 	if len(routes) == 0 {
 		return nil, nil
@@ -525,13 +566,14 @@ func (r *Reader) ReadGasSnapshot(ctx context.Context, routes []Route) (*liquidla
 	states := make(map[common.Address]*gasAdapterState, len(ordered))
 	for i, entry := range ordered {
 		base := i * 2
-		ownerRes, makerRes := headResults[base], headResults[base+1]
-		if !ownerRes.Success || !makerRes.Success {
+		owner, reason := decodeCall("owner", headResults[base], llAdapter.UnpackOwner)
+		if reason != "" {
+			drop(Drop{Adapter: entry.adapter, Reason: "gas state: " + reason})
 			continue
 		}
-		owner, ownerErr := llAdapter.UnpackOwner(ownerRes.ReturnData)
-		marketMaker, makerErr := llAdapter.UnpackMarketMaker(makerRes.ReturnData)
-		if ownerErr != nil || makerErr != nil {
+		marketMaker, reason := decodeCall("marketMaker", headResults[base+1], llAdapter.UnpackMarketMaker)
+		if reason != "" {
+			drop(Drop{Adapter: entry.adapter, Reason: "gas state: " + reason})
 			continue
 		}
 		states[entry.adapter] = &gasAdapterState{
@@ -545,13 +587,20 @@ func (r *Reader) ReadGasSnapshot(ctx context.Context, routes []Route) (*liquidla
 	vaultBase := len(ordered) * 2
 	for i, vault := range vaults {
 		base := vaultBase + i*2
-		freeRes, withdrawableRes := headResults[base], headResults[base+1]
-		if !freeRes.Success || !withdrawableRes.Success {
-			continue
+		freeAssets, reason := decodeCall("freeAssets", headResults[base], vaultV2b.UnpackFreeAssets)
+		withdrawable, withdrawableReason := decodeCall("withdrawable", headResults[base+1], vaultV2b.UnpackWithdrawable)
+		if reason == "" {
+			reason = withdrawableReason
 		}
-		freeAssets, freeErr := vaultV2b.UnpackFreeAssets(freeRes.ReturnData)
-		withdrawable, withdrawableErr := vaultV2b.UnpackWithdrawable(withdrawableRes.ReturnData)
-		if freeErr != nil || withdrawableErr != nil || freeAssets == nil || withdrawable == nil {
+		if reason == "" && (freeAssets == nil || withdrawable == nil) {
+			reason = "freeAssets or withdrawable returned no value"
+		}
+		if reason != "" {
+			for _, entry := range ordered {
+				if entry.vault == vault {
+					drop(Drop{Adapter: entry.adapter, Reason: "gas state: vault " + vault.Hex() + " " + reason})
+				}
+			}
 			continue
 		}
 		vaultStates[vault] = &liquidlanegas.VaultState{
@@ -600,12 +649,12 @@ func (r *Reader) ReadGasSnapshot(ctx context.Context, routes []Route) (*liquidla
 		return nil, errors.Errorf("liquidlane: gas state acquire multicall: got %d results, want %d", len(acquireResults), len(acquireCalls))
 	}
 	for i, read := range reads {
-		result := acquireResults[i]
-		if !result.Success {
-			continue
+		amount, reason := decodeCall("acquireBalance", acquireResults[i], llAdapter.UnpackAcquireBalance)
+		if reason == "" && (amount == nil || amount.Sign() < 0) {
+			reason = fmt.Sprintf("acquireBalance %v is negative", amount)
 		}
-		amount, unpackErr := llAdapter.UnpackAcquireBalance(result.ReturnData)
-		if unpackErr != nil || amount == nil || amount.Sign() < 0 {
+		if reason != "" {
+			drop(Drop{Adapter: read.adapter, TokenIn: read.token, Reason: "gas state: holder " + read.holder.Hex() + " " + reason})
 			continue
 		}
 		state := states[read.adapter]
@@ -632,6 +681,7 @@ func gasSnapshot(
 }
 
 // ReadAdapterSnapshot reads one complete LiquidLane adapter view for solvers that consume all routes.
+// An incomplete view fails with the reads that came back unusable.
 func (r *Reader) ReadAdapterSnapshot(
 	ctx context.Context,
 	adapterAddress common.Address,
@@ -644,29 +694,32 @@ func (r *Reader) ReadAdapterSnapshot(
 	if len(routes) == 0 {
 		return AdapterSnapshot{}, errors.New("liquidlane: adapter has no resolved routes")
 	}
-	pausedByAdapter, err := r.readPaused(ctx, []common.Address{adapterAddress})
+	drop, drops := collectDrops()
+	pausedByAdapter, err := r.readPaused(ctx, []common.Address{adapterAddress}, drop)
 	if err != nil {
 		return AdapterSnapshot{}, err
 	}
 	paused, pausedResolved := pausedByAdapter[adapterAddress]
 	if !pausedResolved {
-		return AdapterSnapshot{}, errors.New("liquidlane: adapter pause state unresolved")
+		return AdapterSnapshot{}, errors.Errorf("liquidlane: adapter pause state unresolved: %s", drops())
 	}
-	auth, err := r.ReadAuth(ctx, []common.Address{adapterAddress}, filler)
+	drop, drops = collectDrops()
+	auth, err := r.ReadAuth(ctx, []common.Address{adapterAddress}, filler, drop)
 	if err != nil {
 		return AdapterSnapshot{}, err
 	}
 	if len(auth) != 1 || auth[0].Adapter != adapterAddress {
-		return AdapterSnapshot{}, errors.New("liquidlane: adapter authorization unresolved")
+		return AdapterSnapshot{}, errors.Errorf("liquidlane: adapter authorization unresolved: %s", drops())
 	}
-	gasState, err := r.ReadGasSnapshot(ctx, routes)
+	drop, drops = collectDrops()
+	gasState, err := r.readGasSnapshot(ctx, routes, drop)
 	if err != nil {
 		return AdapterSnapshot{}, err
 	}
 	adapterState := gasState.Adapters[adapterAddress]
 	vaultState := gasState.Vaults[routes[0].Vault]
 	if adapterState == nil || vaultState == nil {
-		return AdapterSnapshot{}, errors.New("liquidlane: adapter liquidity state unresolved")
+		return AdapterSnapshot{}, errors.Errorf("liquidlane: adapter liquidity state unresolved: %s", drops())
 	}
 
 	inventoryByRoute := make(map[RouteID]Inventory, len(routes))
@@ -675,7 +728,8 @@ func (r *Reader) ReadAdapterSnapshot(
 			inventoryByRoute[route.ID] = DirectInventory(route, new(big.Int), new(big.Int))
 		}
 	} else {
-		inventory, inventoryErr := r.readInventory(ctx, routes, true)
+		drop, drops = collectDrops()
+		inventory, inventoryErr := r.readInventory(ctx, routes, true, drop)
 		if inventoryErr != nil {
 			return AdapterSnapshot{}, inventoryErr
 		}
@@ -683,7 +737,7 @@ func (r *Reader) ReadAdapterSnapshot(
 			inventoryByRoute[item.ID] = item
 		}
 		if len(inventoryByRoute) != len(routes) {
-			return AdapterSnapshot{}, errors.New("liquidlane: adapter inventory unresolved")
+			return AdapterSnapshot{}, errors.Errorf("liquidlane: adapter inventory unresolved: %s", drops())
 		}
 	}
 
@@ -708,25 +762,27 @@ func (r *Reader) ReadAdapterSnapshot(
 	return out, nil
 }
 
+// ReadFillQuotes reads amount-specific quotes for routes of tokenIn; each route left out goes to trace.
 func (r *Reader) ReadFillQuotes(
 	ctx context.Context,
 	routes []Route,
 	tokenIn common.Address,
 	amountIn *big.Int,
+	trace ...DropTrace,
 ) ([]FillQuote, error) {
-	return r.readFillQuotes(ctx, routes, tokenIn, amountIn, false)
+	return r.readFillQuotes(ctx, routes, tokenIn, amountIn, false, dropSink(ctx, trace))
 }
 
 // ReadPricedFillQuotes reads the oracle price in the same multicall as the
 // amount-specific payout so a fill can also price smaller legs exactly.
 func (r *Reader) ReadPricedFillQuotes(
-	ctx context.Context, routes []Route, tokenIn common.Address, amountIn *big.Int,
+	ctx context.Context, routes []Route, tokenIn common.Address, amountIn *big.Int, trace ...DropTrace,
 ) ([]FillQuote, error) {
-	return r.readFillQuotes(ctx, routes, tokenIn, amountIn, true)
+	return r.readFillQuotes(ctx, routes, tokenIn, amountIn, true, dropSink(ctx, trace))
 }
 
 func (r *Reader) readFillQuotes(
-	ctx context.Context, routes []Route, tokenIn common.Address, amountIn *big.Int, withPrice bool,
+	ctx context.Context, routes []Route, tokenIn common.Address, amountIn *big.Int, withPrice bool, drop DropTrace,
 ) ([]FillQuote, error) {
 	if tokenIn == (common.Address{}) || amountIn == nil || amountIn.Sign() <= 0 {
 		return nil, nil
@@ -772,62 +828,84 @@ func (r *Reader) readFillQuotes(
 	}
 	out := make([]FillQuote, 0, len(candidates))
 	for i, route := range candidates {
-		base := i * readsPerRoute
-		paused, maxAssetsRes, amountOutRes, discountRes := res[base], res[base+1], res[base+2], res[base+3]
-		if !unpaused(paused) {
+		quote, reason := fillQuote(route, res[i*readsPerRoute:(i+1)*readsPerRoute], amountIn, withPrice)
+		if reason != "" {
+			drop(Drop{Adapter: route.Adapter, TokenIn: route.TokenIn, Reason: reason})
 			continue
 		}
-		if !maxAssetsRes.Success || !amountOutRes.Success || !discountRes.Success {
-			continue
-		}
-		maxAssets, aerr := llAdapter.UnpackGetMaxAssets(maxAssetsRes.ReturnData)
-		grossAmountOut, oerr := llAdapter.UnpackGetAmountOut(amountOutRes.ReturnData)
-		discount, derr := llAdapter.UnpackMinDiscount(discountRes.ReturnData)
-		if aerr != nil || oerr != nil || derr != nil || maxAssets.Sign() <= 0 || grossAmountOut.Sign() <= 0 ||
-			discount.Sign() < 0 || discount.Cmp(big.NewInt(DiscountPrecision)) > 0 {
-			continue
-		}
-		maxAmountOut := AmountOutAfterDiscount(grossAmountOut, discount)
-		if maxAmountOut.Sign() <= 0 {
-			continue
-		}
-		maxRate := RateForAmountOut(maxAmountOut, amountIn, route.TokenInDecimals, route.TokenOutDecimals)
-		inventory := DirectInventory(route, maxAssets, maxRate)
-		inventory.AdapterMinDiscount = CloneBig(discount)
-		if withPrice {
-			inventory.Price = fillQuotePrice(route, res[base+fillReadsPerRoute], amountIn, grossAmountOut)
-			if inventory.Price == nil {
-				continue
-			}
-		}
-		out = append(out, FillQuote{
-			Inventory:      inventory,
-			AmountIn:       CloneBig(amountIn),
-			GrossAmountOut: CloneBig(grossAmountOut),
-			MaxAmountOut:   maxAmountOut,
-			MinDiscount:    CloneBig(discount),
-		})
+		out = append(out, quote)
 	}
 	return out, nil
 }
 
-func fillQuotePrice(route Route, result chain.CallResult, amountIn, gross *big.Int) *big.Int {
+// fillQuote decodes one route's fill reads, or names the check that drops the route.
+func fillQuote(route Route, res []chain.CallResult, amountIn *big.Int, withPrice bool) (FillQuote, string) {
+	if reason := pauseReason(res[0]); reason != "" {
+		return FillQuote{}, reason
+	}
+	maxAssets, reason := decodeCall("getMaxAssets", res[1], llAdapter.UnpackGetMaxAssets)
+	if reason != "" {
+		return FillQuote{}, reason
+	}
+	grossAmountOut, reason := decodeCall("getAmountOut", res[2], llAdapter.UnpackGetAmountOut)
+	if reason != "" {
+		return FillQuote{}, reason
+	}
+	discount, reason := decodeCall("minDiscount", res[3], llAdapter.UnpackMinDiscount)
+	if reason != "" {
+		return FillQuote{}, reason
+	}
+	if maxAssets.Sign() <= 0 {
+		return FillQuote{}, "getMaxAssets " + maxAssets.String() + " is not positive"
+	}
+	if grossAmountOut.Sign() <= 0 {
+		return FillQuote{}, "getAmountOut " + grossAmountOut.String() + " for amountIn " + amountIn.String() + " is not positive"
+	}
+	if reason = minDiscountReason(discount); reason != "" {
+		return FillQuote{}, reason
+	}
+	maxAmountOut := AmountOutAfterDiscount(grossAmountOut, discount)
+	if maxAmountOut.Sign() <= 0 {
+		return FillQuote{}, fmt.Sprintf("amount out %s after minDiscount %s is not positive", maxAmountOut, discount)
+	}
+	maxRate := RateForAmountOut(maxAmountOut, amountIn, route.TokenInDecimals, route.TokenOutDecimals)
+	inventory := DirectInventory(route, maxAssets, maxRate)
+	inventory.AdapterMinDiscount = CloneBig(discount)
+	if withPrice {
+		inventory.Price, reason = fillQuotePrice(route, res[fillReadsPerRoute], amountIn, grossAmountOut)
+		if reason != "" {
+			return FillQuote{}, reason
+		}
+	}
+	return FillQuote{
+		Inventory:      inventory,
+		AmountIn:       CloneBig(amountIn),
+		GrossAmountOut: CloneBig(grossAmountOut),
+		MaxAmountOut:   maxAmountOut,
+		MinDiscount:    CloneBig(discount),
+	}, ""
+}
+
+func fillQuotePrice(route Route, result chain.CallResult, amountIn, gross *big.Int) (*big.Int, string) {
 	if _, ok := OraclePriceProbe(route.TokenInDecimals, route.TokenOutDecimals); !ok {
 		// One price unit changes the gross by more than one output unit, so the
 		// full amount quote uniquely identifies the integer price.
-		return ImpliedPrice(amountIn, gross, route.TokenInDecimals, route.TokenOutDecimals)
+		return ImpliedPrice(amountIn, gross, route.TokenInDecimals, route.TokenOutDecimals), ""
 	}
-	if !result.Success {
-		return nil
+	price, reason := decodeCall("getAmountOut(price probe)", result, llAdapter.UnpackGetAmountOut)
+	if reason != "" {
+		return nil, reason
 	}
-	price, err := llAdapter.UnpackGetAmountOut(result.ReturnData)
-	if err != nil || AmountOutForRate(amountIn, price, route.TokenInDecimals, route.TokenOutDecimals).Cmp(gross) != 0 {
-		return nil
+	if implied := AmountOutForRate(amountIn, price, route.TokenInDecimals, route.TokenOutDecimals); implied.Cmp(gross) != 0 {
+		return nil, fmt.Sprintf("oracle price %s pays %s for amountIn %s, getAmountOut pays %s", price, implied, amountIn, gross)
 	}
-	return price
+	return price, ""
 }
 
-func (r *Reader) FilterAuthorized(ctx context.Context, inv []Inventory, filler common.Address) ([]Inventory, error) {
+// FilterAuthorized keeps inventory whose adapter authorizes filler; each item left out goes to trace.
+func (r *Reader) FilterAuthorized(
+	ctx context.Context, inv []Inventory, filler common.Address, trace ...DropTrace,
+) ([]Inventory, error) {
 	inv = compactInventory(inv)
 	if len(inv) == 0 {
 		return nil, nil
@@ -836,15 +914,18 @@ func (r *Reader) FilterAuthorized(ctx context.Context, inv []Inventory, filler c
 	for _, item := range inv {
 		adapters = append(adapters, item.Adapter)
 	}
-	authorized, err := r.authorizedAdapters(ctx, adapters, filler)
+	unauthorized, err := r.unauthorizedAdapters(ctx, adapters, filler)
 	if err != nil {
 		return nil, err
 	}
+	drop := dropSink(ctx, trace)
 	out := make([]Inventory, 0, len(inv))
 	for _, item := range inv {
-		if authorized[item.Adapter] {
-			out = append(out, item)
+		if reason, denied := unauthorized[item.Adapter]; denied {
+			drop(Drop{Adapter: item.Adapter, TokenIn: item.TokenIn, Reason: reason})
+			continue
 		}
+		out = append(out, item)
 	}
 	return out, nil
 }
@@ -852,7 +933,10 @@ func (r *Reader) FilterAuthorized(ctx context.Context, inv []Inventory, filler c
 // FilterAuthorizedRoutes filters by the adapter-wide marketMaker/owner/isFiller authorization and
 // preserves every non-zero-adapter input route. It intentionally accepts adapter-only projections so
 // startup validation does not depend on whether a solver has already resolved token-pair metadata.
-func (r *Reader) FilterAuthorizedRoutes(ctx context.Context, routes []Route, filler common.Address) ([]Route, error) {
+// Each route left out goes to trace.
+func (r *Reader) FilterAuthorizedRoutes(
+	ctx context.Context, routes []Route, filler common.Address, trace ...DropTrace,
+) ([]Route, error) {
 	if len(routes) == 0 {
 		return nil, nil
 	}
@@ -865,39 +949,83 @@ func (r *Reader) FilterAuthorizedRoutes(ctx context.Context, routes []Route, fil
 	if len(adapters) == 0 {
 		return nil, nil
 	}
-	authorized, err := r.authorizedAdapters(ctx, adapters, filler)
+	unauthorized, err := r.unauthorizedAdapters(ctx, adapters, filler)
 	if err != nil {
 		return nil, err
 	}
+	drop := dropSink(ctx, trace)
 	out := make([]Route, 0, len(routes))
 	for _, route := range routes {
-		if route.Adapter != (common.Address{}) && authorized[route.Adapter] {
-			out = append(out, route)
+		if route.Adapter == (common.Address{}) {
+			continue
 		}
+		if reason, denied := unauthorized[route.Adapter]; denied {
+			drop(Drop{Adapter: route.Adapter, TokenIn: route.TokenIn, Reason: reason})
+			continue
+		}
+		out = append(out, route)
 	}
 	return out, nil
 }
 
-func (r *Reader) authorizedAdapters(
+// unauthorizedAdapters maps each adapter that does not authorize filler to the reason.
+func (r *Reader) unauthorizedAdapters(
 	ctx context.Context,
 	adapters []common.Address,
 	filler common.Address,
-) (map[common.Address]bool, error) {
-	auth, err := r.ReadAuth(ctx, adapters, filler)
+) (map[common.Address]string, error) {
+	auth, failures, err := r.readAuth(ctx, adapters, filler)
 	if err != nil {
 		return nil, err
 	}
-	authorized := make(map[common.Address]bool, len(auth))
+	byAdapter := make(map[common.Address]Auth, len(auth))
 	for _, item := range auth {
-		authorized[item.Adapter] = item.Authorized
+		byAdapter[item.Adapter] = item
 	}
-	return authorized, nil
+	for _, adapter := range adapters {
+		if _, failed := failures[adapter]; failed {
+			continue
+		}
+		item, read := byAdapter[adapter]
+		switch {
+		case !read: // readAuth skips every read only for a zero filler.
+			failures[adapter] = "filler is the zero address"
+		case !item.Authorized:
+			failures[adapter] = fmt.Sprintf("filler %s is not marketMaker %s, owner %s, or a delegated filler",
+				filler.Hex(), item.MarketMaker.Hex(), item.Owner.Hex())
+		}
+	}
+	return failures, nil
 }
 
-func (r *Reader) ReadAuth(ctx context.Context, adapters []common.Address, filler common.Address) ([]Auth, error) {
+// ReadAuth reads filler authorization per adapter. An adapter whose roles cannot be read is left
+// out, and one whose isFiller read fails stays unauthorized; both go to trace.
+func (r *Reader) ReadAuth(
+	ctx context.Context, adapters []common.Address, filler common.Address, trace ...DropTrace,
+) ([]Auth, error) {
+	auth, failures, err := r.readAuth(ctx, adapters, filler)
+	if err != nil {
+		return nil, err
+	}
+	if len(failures) > 0 {
+		drop := dropSink(ctx, trace)
+		for _, adapter := range dedupeAddresses(adapters) {
+			if reason, failed := failures[adapter]; failed {
+				drop(Drop{Adapter: adapter, Reason: reason})
+			}
+		}
+	}
+	return auth, nil
+}
+
+// readAuth also returns why each failed adapter read failed.
+func (r *Reader) readAuth(
+	ctx context.Context, adapters []common.Address, filler common.Address,
+) ([]Auth, map[common.Address]string, error) {
 	adapters = dedupeAddresses(adapters)
+	failures := make(map[common.Address]string)
 	if len(adapters) == 0 || filler == (common.Address{}) {
-		return nil, nil
+		return nil, failures, nil
 	}
 	calls := make([]chain.Call, 0, len(adapters)*2)
 	for _, adapterAddr := range adapters {
@@ -908,23 +1036,24 @@ func (r *Reader) ReadAuth(ctx context.Context, adapters []common.Address, filler
 	}
 	res, err := r.chain.Multicall(ctx, calls)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(res) != len(calls) {
-		return nil, errors.Errorf("liquidlane: authorization multicall: got %d results, want %d", len(res), len(calls))
+		return nil, nil, errors.Errorf("liquidlane: authorization multicall: got %d results, want %d", len(res), len(calls))
 	}
 
 	auths := make([]Auth, len(adapters))
 	resolved := make([]bool, len(adapters))
 	var delegatedChecks []int
 	for i := range adapters {
-		mm, ow := res[i*2], res[i*2+1]
-		if !mm.Success || !ow.Success {
+		marketMaker, reason := decodeCall("marketMaker", res[i*2], llAdapter.UnpackMarketMaker)
+		if reason != "" {
+			failures[adapters[i]] = "authorization: " + reason
 			continue
 		}
-		marketMaker, e1 := llAdapter.UnpackMarketMaker(mm.ReturnData)
-		owner, e2 := llAdapter.UnpackOwner(ow.ReturnData)
-		if e1 != nil || e2 != nil {
+		owner, reason := decodeCall("owner", res[i*2+1], llAdapter.UnpackOwner)
+		if reason != "" {
+			failures[adapters[i]] = "authorization: " + reason
 			continue
 		}
 		auths[i] = Auth{Adapter: adapters[i], MarketMaker: marketMaker, Owner: owner}
@@ -946,22 +1075,23 @@ func (r *Reader) ReadAuth(ctx context.Context, adapters []common.Address, filler
 		}
 		delegationResults, err := r.chain.Multicall(ctx, delegationCalls)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if len(delegationResults) != len(delegationCalls) {
-			return nil, errors.Errorf(
+			return nil, nil, errors.Errorf(
 				"liquidlane: filler authorization multicall: got %d results, want %d",
 				len(delegationResults),
 				len(delegationCalls),
 			)
 		}
 		for j, i := range delegatedChecks {
-			if delegationResults[j].Success {
-				if ok, derr := llAdapter.UnpackIsFiller(delegationResults[j].ReturnData); derr == nil {
-					auths[i].IsFiller = ok
-					auths[i].Authorized = ok
-				}
+			ok, reason := decodeCall("isFiller", delegationResults[j], llAdapter.UnpackIsFiller)
+			if reason != "" {
+				failures[adapters[i]] = "authorization: " + reason
+				continue
 			}
+			auths[i].IsFiller = ok
+			auths[i].Authorized = ok
 		}
 	}
 
@@ -971,15 +1101,23 @@ func (r *Reader) ReadAuth(ctx context.Context, adapters []common.Address, filler
 			out = append(out, item)
 		}
 	}
-	return out, nil
+	return out, failures, nil
 }
 
-func unpaused(result chain.CallResult) bool {
-	if !result.Success {
-		return false
+// pauseReason names why a paused() read blocks the route, or returns "" when it is unpaused.
+func pauseReason(result chain.CallResult) string {
+	paused, reason := decodeCall("paused", result, llAdapter.UnpackPaused)
+	if reason == "" && paused {
+		return "adapter is paused"
 	}
-	paused, err := llAdapter.UnpackPaused(result.ReturnData)
-	return err == nil && !paused
+	return reason
+}
+
+func minDiscountReason(discount *big.Int) string {
+	if discount == nil || discount.Sign() < 0 || discount.Cmp(big.NewInt(DiscountPrecision)) > 0 {
+		return fmt.Sprintf("minDiscount %v is outside [0, %d]", discount, DiscountPrecision)
+	}
+	return ""
 }
 
 func (r *Reader) readTokenCounts(ctx context.Context, adapters []Adapter) ([]int, error) {
@@ -998,8 +1136,9 @@ func (r *Reader) readTokenCounts(ctx context.Context, adapters []Adapter) ([]int
 	for i, call := range res {
 		if !call.Success {
 			return nil, errors.Errorf(
-				"liquidlane: resolve adapter %s tokensToRedeem length: call failed",
+				"liquidlane: resolve adapter %s %s",
 				adapters[i].Adapter.Hex(),
+				callFailure("getTokensToRedeemLength", call),
 			)
 		}
 		n, unpackErr := llAdapter.UnpackGetTokensToRedeemLength(call.ReturnData)
