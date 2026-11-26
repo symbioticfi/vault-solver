@@ -24,10 +24,10 @@ func testWorkflow(t *testing.T) (*Workflow, connectortest.Fixture) {
 	return &Workflow{Chain: f.Chain, ChainID: big.NewInt(1), Source: f.Permissions, Filler: filler, Signer: f.Chain.Signer}, f
 }
 
-func testRequest(amountOut *big.Int) Request {
+func testRequest() Request {
 	return Request{
 		Venue: vlt, Executor: common.HexToAddress("0x43"), DiscountID: *connectortest.DiscountID(), MaxAssets: big.NewInt(900),
-		TokenIn: tIn, AmountIn: big.NewInt(123), TokenOut: tOut, AmountOut: amountOut,
+		TokenIn: tIn, AmountIn: big.NewInt(123), TokenOut: tOut,
 	}
 }
 
@@ -58,13 +58,13 @@ func TestPrepareTakesConnectorPayment(t *testing.T) {
 		{name: "floored like the contract", gross: big.NewInt(101), remaining: 900, maxAssets: 900, want: 98},
 		{name: "oracle unreadable", remaining: 900, maxAssets: 900, wantErr: "getAmountOut"},
 		{name: "pays nothing", gross: big.NewInt(1), remaining: 900, maxAssets: 900, wantErr: "pays nothing"},
-		{name: "above policy budget", gross: big.NewInt(500), remaining: 489, maxAssets: 900, wantErr: "whole award"},
-		{name: "above advertised capacity", gross: big.NewInt(500), remaining: 900, maxAssets: 489, wantErr: "whole award"},
+		{name: "above policy budget", gross: big.NewInt(500), remaining: 489, maxAssets: 900, wantErr: "remainingAssets 489 below required output 490"},
+		{name: "above advertised capacity", gross: big.NewInt(500), remaining: 900, maxAssets: 489, wantErr: "maxAssets 489 below required output 490"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w, f := testWorkflow(t)
 			f.Chain.AmountOut, f.Chain.Remaining = tc.gross, big.NewInt(tc.remaining)
-			request := testRequest(nil)
+			request := testRequest()
 			request.MaxAssets = big.NewInt(tc.maxAssets)
 			legs, err := w.PrepareLegs(t.Context(), []Request{request}, resolveFixture)
 			if tc.wantErr != "" {

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -95,6 +96,29 @@ func TestQuoteRechecksSnapshotExpiryAfterDecision(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestQuoteRechecksWallExpiryAfterContext(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		solver := &Solver{cfg: &Config{}}
+		state := &quoteState{expiresAt: time.Now().Add(time.Second)}
+		solver.quoteState.Store(state)
+		ctx, cancel := context.WithDeadline(t.Context(), state.expiresAt)
+		defer cancel()
+
+		got := solver.quoteStateChange(pausedQuoteContext{Context: ctx}, 0, state, 0)
+		if got == "" {
+			t.Fatal("publication gate accepted a quote past wall-clock expiry")
+		}
+	})
+}
+
+type pausedQuoteContext struct{ context.Context }
+
+func (c pausedQuoteContext) Err() error {
+	err := c.Context.Err()
+	time.Sleep(2 * time.Second)
+	return err
 }
 
 func TestQuoteDeclinesCanceledRequestEvenWhenStrategyIgnoresIt(t *testing.T) {

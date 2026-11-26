@@ -162,16 +162,23 @@ func ValidateFillRoutes(input FillValidation, routes []FillRoute) ([]FillRoute, 
 	return normalized, nil
 }
 
-// FillRouteReservations validates and aggregates the capacity reserved by a fill plan.
-func FillRouteReservations(routes []FillRoute) (liquidlane.CapacityReservations, bool) {
+// FillRouteReservations validates and aggregates the capacity reserved by a fill plan. The error
+// names the route that cannot be reserved.
+func FillRouteReservations(routes []FillRoute) (liquidlane.CapacityReservations, error) {
+	if len(routes) == 0 {
+		return nil, errors.New("fill plan has no routes to reserve")
+	}
 	reservations := make(liquidlane.CapacityReservations)
-	for _, route := range routes {
-		if route.CapacityID == "" || route.ReservedAmountOut == nil || route.ReservedAmountOut.Sign() <= 0 {
-			return nil, false
+	for index, route := range routes {
+		if route.CapacityID == "" {
+			return nil, errors.Errorf("fill route %d (%s) has no capacity id", index, route.RouteID)
+		}
+		if route.ReservedAmountOut == nil || route.ReservedAmountOut.Sign() <= 0 {
+			return nil, errors.Errorf("fill route %d (%s) reserves non-positive amount %v", index, route.RouteID, route.ReservedAmountOut)
 		}
 		reservations.Add(route.CapacityID, route.ReservedAmountOut)
 	}
-	return reservations, len(reservations) > 0
+	return reservations, nil
 }
 
 func validFillRouteAmounts(route FillRoute) bool {

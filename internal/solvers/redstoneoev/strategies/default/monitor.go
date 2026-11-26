@@ -3,10 +3,13 @@ package defaultstrategy
 import (
 	"context"
 	"math/big"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/morpho"
@@ -76,8 +79,10 @@ func (m *apiMonitor) snapshot() *snapshot {
 }
 
 // candidates evaluates our tracked at-risk set at the auction price. RedStone's pushed positions are ignored.
-func (m *apiMonitor) candidates(auction types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot) []evalItem {
-	return candidatesFromAuctionWithAdapter(m.log, m.snapshot(), auction, nowTs, adapter)
+func (m *apiMonitor) candidates(
+	auction types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot, tally *rejectTally,
+) []evalItem {
+	return candidatesFromAuctionWithAdapter(m.log, m.snapshot(), auction, nowTs, adapter, tally)
 }
 
 func (m *apiMonitor) run(ctx context.Context) {
@@ -105,13 +110,14 @@ func (m *apiMonitor) refresh(ctx context.Context) {
 	adapter, ok := m.loadAdapter()
 	if !ok {
 		observability.Decline(ctx, "skipped", "adapter_snapshot_unavailable")
-		observability.Log(ctx).V(1).Info("API refresh skipped: adapter snapshot unavailable")
+		observability.Log(ctx).V(1).Info("API refresh skipped: solver has not read the adapter snapshot yet")
 		return
 	}
 	loan, redeemable, ok := adapterMarketScope(adapter)
 	if !ok {
 		observability.Decline(ctx, "skipped", "adapter_snapshot_incomplete")
-		observability.Log(ctx).V(1).Info("API refresh skipped: adapter snapshot incomplete")
+		observability.Log(ctx).V(1).Info("API refresh skipped: adapter snapshot needs a loan token and a non-zero redeemable asset",
+			"loan", adapter.Loan.Hex(), "redeemable", len(adapter.Redeemable))
 		return
 	}
 
@@ -123,7 +129,8 @@ func (m *apiMonitor) refresh(ctx context.Context) {
 	apiSnap := m.apiMarketSnapshot(apiMarkets, loan, redeemable)
 	if len(apiSnap.markets) == 0 {
 		observability.Decline(ctx, "skipped", "no_usable_markets")
-		observability.Log(ctx).V(1).Info("morpho API market refresh returned no usable adapter markets")
+		observability.Log(ctx).V(1).Info("morpho API market refresh returned no usable adapter markets",
+			"discovered", len(apiMarkets), "loan", loan.Hex(), "redeemable", len(redeemable))
 		return
 	}
 
@@ -136,7 +143,7 @@ func (m *apiMonitor) refresh(ctx context.Context) {
 		observability.Log(ctx).Error(err, "morpho API position refresh failed; keeping cache")
 		return
 	}
-	positions := apiPositionsSnapshot(apiPositions, apiSnap.markets)
+	positions := apiPositionsSnapshot(observability.Log(ctx), apiPositions, apiSnap.markets)
 
 	m.snap.Store(&snapshot{
 		markets: apiSnap.markets, prices: apiSnap.prices, positions: positions,
@@ -178,13 +185,21 @@ func (m *apiMonitor) apiMarketSnapshot(apiMarkets []morphoMarket, loan common.Ad
 	}
 	views := make([]apiMarketView, 0, len(apiMarkets))
 	for _, apiMarket := range apiMarkets {
-		view, ok := marketInfoFromAPI(apiMarket)
-		if !ok || view.info.Params.LoanToken != loan || !redeem[view.info.Params.CollateralToken] {
+		view, err := marketInfoFromAPI(apiMarket)
+		if err != nil {
+			m.log.V(1).Info("dropping malformed Morpho API market", "market", apiMarket.MarketID.Hex(), "reason", err.Error())
 			continue
 		}
+		if view.info.Params.LoanToken != loan || !redeem[view.info.Params.CollateralToken] {
+			continue // outside the adapter's loan/collateral scope
+		}
 		derived, err := deriveMarketID(view.info.Params)
-		if err != nil || derived != view.id {
-			m.log.V(1).Info("morpho API market id mismatch; dropping", "market", view.id.Hex())
+		if err != nil {
+			m.log.V(1).Info("morpho API market params do not hash; dropping", "market", view.id.Hex(), "reason", err.Error())
+			continue
+		}
+		if derived != view.id {
+			m.log.V(1).Info("morpho API market id mismatch; dropping", "market", view.id.Hex(), "derived", derived.Hex())
 			continue
 		}
 		views = append(views, view)
@@ -215,43 +230,42 @@ type apiMarketView struct {
 	blockTime uint64
 }
 
-func marketInfoFromAPI(m morphoMarket) (apiMarketView, bool) {
-	if m.MarketID == (common.Hash{}) || m.CollateralAsset == nil || m.State == nil {
-		return apiMarketView{}, false
+func marketInfoFromAPI(m morphoMarket) (apiMarketView, error) {
+	switch {
+	case m.MarketID == (common.Hash{}):
+		return apiMarketView{}, errors.New("market id is empty")
+	case m.CollateralAsset == nil:
+		return apiMarketView{}, errors.New("collateral asset is missing")
+	case m.State == nil:
+		return apiMarketView{}, errors.New("market state is missing")
 	}
-	lltv, ok := parseAPIBig(m.LLTV)
-	if !ok {
-		return apiMarketView{}, false
+	var bad []string
+	num := func(field, v string) *big.Int {
+		n, ok := parseAPIBig(v)
+		if !ok {
+			bad = append(bad, field+"="+strconv.Quote(v))
+		}
+		return n
 	}
-	supplyAssets, ok := parseAPIBig(m.State.SupplyAssets)
-	if !ok {
-		return apiMarketView{}, false
-	}
-	supplyShares, ok := parseAPIBig(m.State.SupplyShares)
-	if !ok {
-		return apiMarketView{}, false
-	}
-	borrowAssets, ok := parseAPIBig(m.State.BorrowAssets)
-	if !ok {
-		return apiMarketView{}, false
-	}
-	borrowShares, ok := parseAPIBig(m.State.BorrowShares)
-	if !ok {
-		return apiMarketView{}, false
-	}
+	lltv := num("lltv", m.LLTV)
+	supplyAssets := num("supplyAssets", m.State.SupplyAssets)
+	supplyShares := num("supplyShares", m.State.SupplyShares)
+	borrowAssets := num("borrowAssets", m.State.BorrowAssets)
+	borrowShares := num("borrowShares", m.State.BorrowShares)
 	lastUpdate, ok := parseAPIUint64(m.State.Timestamp)
 	if !ok {
-		return apiMarketView{}, false
+		bad = append(bad, "timestamp="+strconv.Quote(m.State.Timestamp))
 	}
 	block, ok := parseAPIUint64(m.State.BlockNumber)
 	if !ok || block == 0 {
-		return apiMarketView{}, false
+		bad = append(bad, "blockNumber="+strconv.Quote(m.State.BlockNumber))
 	}
 	var price *big.Int
 	if m.State.Price != "" {
-		if price, ok = parseAPIBig(m.State.Price); !ok {
-			return apiMarketView{}, false
-		}
+		price = num("price", m.State.Price)
+	}
+	if len(bad) > 0 {
+		return apiMarketView{}, errors.Errorf("fields are not non-negative integers: %s", strings.Join(bad, ", "))
 	}
 	params := MarketParams{
 		LoanToken:       m.LoanAsset.Address,
@@ -262,7 +276,8 @@ func marketInfoFromAPI(m morphoMarket) (apiMarketView, bool) {
 	}
 	if params.LoanToken == (common.Address{}) || params.CollateralToken == (common.Address{}) ||
 		params.Oracle == (common.Address{}) {
-		return apiMarketView{}, false
+		return apiMarketView{}, errors.Errorf("zero address in params: loan %s, collateral %s, oracle %s",
+			params.LoanToken.Hex(), params.CollateralToken.Hex(), params.Oracle.Hex())
 	}
 	return apiMarketView{id: m.MarketID, price: price, block: block, blockTime: lastUpdate, info: MarketInfo{
 		Params: params,
@@ -276,17 +291,21 @@ func marketInfoFromAPI(m morphoMarket) (apiMarketView, bool) {
 			Lltv:              lltv,
 			BorrowRatePerSec:  big.NewInt(0),
 		},
-	}}, true
+	}}, nil
 }
 
-func apiPositionsSnapshot(apiPositions []morphoPosition, markets map[common.Hash]MarketInfo) map[common.Hash]map[common.Address]morpho.PositionState {
+func apiPositionsSnapshot(
+	log logr.Logger, apiPositions []morphoPosition, markets map[common.Hash]MarketInfo,
+) map[common.Hash]map[common.Address]morpho.PositionState {
 	out := make(map[common.Hash]map[common.Address]morpho.PositionState)
 	for _, p := range apiPositions {
 		if _, ok := markets[p.MarketID]; !ok {
-			continue
+			continue // position in a market outside the adapter scope
 		}
-		pos, ok := positionStateFromAPI(p)
-		if !ok {
+		pos, err := positionStateFromAPI(p)
+		if err != nil {
+			log.V(1).Info("dropping malformed Morpho API position", "market", p.MarketID.Hex(),
+				"borrower", p.Borrower.Hex(), "reason", err.Error())
 			continue
 		}
 		if out[p.MarketID] == nil {
@@ -297,19 +316,19 @@ func apiPositionsSnapshot(apiPositions []morphoPosition, markets map[common.Hash
 	return out
 }
 
-func positionStateFromAPI(p morphoPosition) (morpho.PositionState, bool) {
+func positionStateFromAPI(p morphoPosition) (morpho.PositionState, error) {
 	if p.MarketID == (common.Hash{}) || p.Borrower == (common.Address{}) {
-		return morpho.PositionState{}, false
+		return morpho.PositionState{}, errors.Errorf("market id %s or borrower %s is empty", p.MarketID.Hex(), p.Borrower.Hex())
 	}
 	borrowShares, ok := parseAPIBig(p.BorrowShares)
 	if !ok {
-		return morpho.PositionState{}, false
+		return morpho.PositionState{}, errors.Errorf("borrowShares %q is not a non-negative integer", p.BorrowShares)
 	}
 	collateral, ok := parseAPIBig(p.Collateral)
 	if !ok {
-		return morpho.PositionState{}, false
+		return morpho.PositionState{}, errors.Errorf("collateral %q is not a non-negative integer", p.Collateral)
 	}
-	return morpho.PositionState{BorrowShares: borrowShares, Collateral: collateral}, true
+	return morpho.PositionState{BorrowShares: borrowShares, Collateral: collateral}, nil
 }
 
 func parseAPIBig(s string) (*big.Int, bool) {
@@ -340,19 +359,20 @@ func snapshotHasPositions(snap *snapshot) bool {
 	return false
 }
 
-func snapshotFreshForAuction(snap *snapshot, auction types.AuctionSnapshot) string {
+func snapshotFreshForAuction(snap *snapshot, auction types.AuctionSnapshot) bidSkip {
 	if !snapshotHasPositions(snap) {
-		return ""
+		return bidSkip{}
 	}
 	if snap.block == 0 || snap.blockTime == 0 {
-		return skipStaleEpoch
+		return skipf(skipStaleEpoch, "position snapshot has no block (block %d, blockTime %d)", snap.block, snap.blockTime)
 	}
 	auctionTs := auction.Timestamp / 1000
 	if auctionTs <= 0 {
-		return ""
+		return bidSkip{}
 	}
 	if uint64(auctionTs) > snap.blockTime+uint64(snapshotMaxAuctionLag/time.Second) {
-		return skipStaleEpoch
+		return skipf(skipStaleEpoch, "auction time %d is more than %s after snapshot block time %d",
+			auctionTs, snapshotMaxAuctionLag, snap.blockTime)
 	}
-	return ""
+	return bidSkip{}
 }

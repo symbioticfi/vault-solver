@@ -54,18 +54,18 @@ func parseOutputContext(outputAmount *big.Int, outputContext []byte) (*outputPri
 	}
 }
 
-func (o *outputPricing) fill(solver common.Address, now time.Time, acceptableAmount *big.Int) (*big.Int, bool) {
+// fill returns the required output amount, or an ErrFillDeclined error naming the unmet condition.
+func (o *outputPricing) fill(solver common.Address, now time.Time, acceptableAmount *big.Int) (*big.Int, error) {
 	currentTime := uint32Time(now)
-	if o.exclusive && currentTime < o.startTime {
-		solverID := solverIdentifier(solver)
-		if o.exclusiveFor != solverID {
-			return nil, false
-		}
+	if o.exclusive && currentTime < o.startTime && o.exclusiveFor != solverIdentifier(solver) {
+		return nil, errors.Errorf("%w: order is exclusive to %x until %d, chain time %d",
+			types.ErrFillDeclined, o.exclusiveFor, o.startTime, currentTime)
 	}
 	if o.amount.Cmp(acceptableAmount) > 0 {
-		return nil, false
+		return nil, errors.Errorf("%w: required amount out %s exceeds max amount out %s",
+			types.ErrFillDeclined, o.amount, acceptableAmount)
 	}
-	return new(big.Int).Set(o.amount), true
+	return new(big.Int).Set(o.amount), nil
 }
 
 func uint32Time(t time.Time) uint32 {

@@ -98,8 +98,11 @@ func (a *morphoClient) DiscoverMarketData(ctx context.Context, chainID int64, lo
 		if len(out) >= maxDiscoverMarkets {
 			break
 		}
-		m := morphoMarketFromDiscover(data.Markets.Items[i])
+		item := data.Markets.Items[i]
+		m := morphoMarketFromDiscover(item)
 		if m.MarketID == (common.Hash{}) {
+			observability.Log(ctx).V(1).Info("dropping Morpho API market: empty market id or missing oracle",
+				"marketId", item.MarketId, "hasOracle", item.Oracle != nil)
 			continue
 		}
 		out = append(out, m)
@@ -150,6 +153,8 @@ func (a *morphoClient) positionsChunk(ctx context.Context, chainID int64, ids []
 			}
 			pos := morphoPositionFromWire(it.User.Address, it.Market.MarketId, it.HealthFactor, state)
 			if pos.MarketID == (common.Hash{}) || pos.Borrower == (common.Address{}) {
+				observability.Log(ctx).V(1).Info("dropping Morpho API position: empty market id or borrower",
+					"marketId", it.Market.MarketId, "borrower", it.User.Address)
 				continue
 			}
 			out = append(out, pos)

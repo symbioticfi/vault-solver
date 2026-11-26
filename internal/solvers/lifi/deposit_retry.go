@@ -70,7 +70,7 @@ func (q *orderDepositRetryQueue) scheduleBefore(order *submittedOrder, now, dead
 	}
 	if state == nil {
 		if len(q.byKey) >= q.capacity {
-			return errOrderDepositRetryFull
+			return errors.Errorf("%w: %d of %d slots used", errOrderDepositRetryFull, len(q.byKey), q.capacity)
 		}
 		state = &orderDepositRetry{startedAt: now}
 		q.byKey[key] = state
@@ -83,7 +83,8 @@ func (q *orderDepositRetryQueue) scheduleBefore(order *submittedOrder, now, dead
 	finalReadyAt := retryEnd.Add(-initialOrderDepositRetryBackoff)
 	if !now.Before(finalReadyAt) {
 		delete(q.byKey, key)
-		return boundErr
+		return errors.Errorf("%w: last retry slot %d (bound %d less %s backoff) is not after now %d",
+			boundErr, finalReadyAt.Unix(), retryEnd.Unix(), initialOrderDepositRetryBackoff, now.Unix())
 	}
 
 	if state.backoff == 0 {
@@ -145,7 +146,7 @@ func (q *orderDepositRetryQueue) popReady(now time.Time) (*submittedOrder, error
 	retryEnd, boundErr := state.retryEnd()
 	if !now.Before(retryEnd) {
 		delete(q.byKey, orderInboxKey(state.order))
-		return state.order, boundErr
+		return state.order, errors.Errorf("%w: bound %d is not after now %d", boundErr, retryEnd.Unix(), now.Unix())
 	}
 	return state.order, nil
 }

@@ -33,7 +33,7 @@ func TestBuildFillPlanSettlesAwardQuotedAtExactPayout(t *testing.T) {
 		Inventory: liquidlane.DirectInventory(route, capacity, nil), AmountIn: amountIn,
 		GrossAmountOut: gross, MaxAmountOut: required, MinDiscount: discount,
 	}
-	candidates := liquidgreedy.NormalizeOracleInventory(amountIn, []liquidlane.Inventory{source}, []liquidlane.FillQuote{physical})
+	candidates := liquidgreedy.NormalizeOracleInventory(amountIn, []liquidlane.Inventory{source}, []liquidlane.FillQuote{physical}, nil)
 	if len(candidates) != 1 {
 		t.Fatalf("candidates = %d, want 1", len(candidates))
 	}
@@ -48,6 +48,31 @@ func TestBuildFillPlanSettlesAwardQuotedAtExactPayout(t *testing.T) {
 	if plan == nil || len(plan.Legs) != 1 || plan.QuotedAmountOut.Cmp(required) != 0 ||
 		plan.Legs[0].AmountIn.Cmp(amountIn) != 0 || plan.Legs[0].AmountOut.Cmp(required) != 0 {
 		t.Fatalf("plan = %+v, want one leg paying %s for %s", plan, required, amountIn)
+	}
+}
+
+func TestBuildFillPlanDirectSwapPaysCapacityBetweenRoundedPayouts(t *testing.T) {
+	route := liquidlane.NewRoute(1, vlt, vlt, tIn, tOut, 6, 6)
+	amountIn := big.NewInt(20_000_022)
+	capacity := big.NewInt(40_000_002)
+	source := liquidlane.DirectInventory(route, capacity, nil)
+	source.Price = big.NewInt(2_000_000_000_000_000_000)
+	source.AdapterMinDiscount = big.NewInt(1)
+	candidates := liquidgreedy.NormalizeOracleInventory(amountIn, []liquidlane.Inventory{source}, []liquidlane.FillQuote{{
+		Inventory: source, AmountIn: amountIn, GrossAmountOut: big.NewInt(40_000_044),
+		MaxAmountOut: big.NewInt(40_000_003), MinDiscount: source.AdapterMinDiscount,
+	}}, nil)
+	input := baseInput(candidates...)
+	input.AmountIn, input.RequiredAmountOut, input.RequireSingleRoute = amountIn, capacity, true
+
+	plan, err := New().BuildFillPlan(t.Context(), input)
+	if err != nil || plan == nil || len(plan.Legs) != 1 {
+		t.Fatalf("expected a direct fill at the output cap, got %+v, %v", plan, err)
+	}
+	leg := plan.Legs[0]
+	if leg.DiscountID != nil || leg.AmountIn.Cmp(amountIn) != 0 || leg.AmountOut.Cmp(capacity) != 0 ||
+		plan.QuotedAmountOut.Cmp(capacity) != 0 {
+		t.Fatalf("leg = %+v, total = %s; want full input and output capped at %s", leg, plan.QuotedAmountOut, capacity)
 	}
 }
 
@@ -82,7 +107,7 @@ func TestBuildFillPlanPricesSplitLegsAtAdapterPayout(t *testing.T) {
 					MaxAmountOut: big.NewInt(tc.gross - 1), MinDiscount: left.AdapterMinDiscount},
 				{Inventory: right, AmountIn: amountIn, GrossAmountOut: big.NewInt(tc.otherGross),
 					MaxAmountOut: big.NewInt(tc.otherGross), MinDiscount: right.AdapterMinDiscount},
-			})
+			}, nil)
 			input := baseInput(candidates...)
 			input.AmountIn, input.RequiredAmountOut = amountIn, big.NewInt(tc.total)
 			plan, err := New().BuildFillPlan(t.Context(), input)

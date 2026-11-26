@@ -3,19 +3,23 @@ package rfq
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/filler"
 	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/filler/fillertest"
+	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
+	"github.com/go-logr/logr/funcr"
 	"github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/api/rfqbackend"
@@ -23,6 +27,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector/connectortest"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"gopkg.in/yaml.v3"
 )
 
@@ -116,14 +121,14 @@ func TestAwardSizingOnlyUsesSignedTuple(t *testing.T) {
 		want   string
 	}{
 		{"valid", func(*executor.IReactorOrder) {}, ""},
-		{"different filler", func(o *executor.IReactorOrder) { o.Filler = vlt }, "filler"},
-		{"zero input", func(o *executor.IReactorOrder) { o.Request.AmountIn = new(big.Int) }, "input"},
-		{"deadline overflow", func(o *executor.IReactorOrder) { o.Request.Deadline = new(big.Int).Lsh(big.NewInt(1), 255) }, "deadline"},
-		{"missing output", func(o *executor.IReactorOrder) { o.Outputs = nil }, "outputs"},
+		{"different filler", func(o *executor.IReactorOrder) { o.Filler = vlt }, "order filler " + vlt.Hex() + " is not this filler"},
+		{"zero input", func(o *executor.IReactorOrder) { o.Request.AmountIn = new(big.Int) }, "order input amount 0 is not a positive uint256"},
+		{"deadline overflow", func(o *executor.IReactorOrder) { o.Request.Deadline = new(big.Int).Lsh(big.NewInt(1), 255) }, "is not a positive int64"},
+		{"missing output", func(o *executor.IReactorOrder) { o.Outputs = nil }, "order has no outputs"},
 		{"split output tokens", func(o *executor.IReactorOrder) {
 			o.Outputs = append(o.Outputs, executor.IReactorOutput{Token: tIn, Amount: big.NewInt(1), Recipient: vlt})
-		}, "one output"},
-		{"zero payment", func(o *executor.IReactorOrder) { o.Outputs[0].Amount = new(big.Int) }, "positive"},
+		}, "order output 1 pays " + tIn.Hex() + ", not the first output's token " + tOut.Hex()},
+		{"zero payment", func(o *executor.IReactorOrder) { o.Outputs[0].Amount = new(big.Int) }, "order output 0 amount 0 is not positive"},
 		{"payment overflow", func(o *executor.IReactorOrder) { o.Outputs[0].Amount = new(big.Int).Lsh(big.NewInt(1), 256) }, "uint256"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -422,12 +427,122 @@ func TestPrepareRequiresConnectorPrecision(t *testing.T) {
 			item := discounts.ListItem{DiscountPrecision: precision, Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
 				Collateral: tOut.Hex(), DiscountID: connectortest.DiscountID().Hex(), MaxAssets: "900"}
 			intent, err := prepareAtHead(t, &s, awardRow(t, order), []discounts.ListItem{item})
-			if err != nil || intent != nil {
+			if err == nil || intent != nil || !strings.Contains(err.Error(), "1 with precision other than "+connector.PrecisionText) {
 				t.Fatalf("precision %q: intent=%v err=%v", precision, intent, err)
 			}
 			if f.reader.OuterCalls != 0 {
 				t.Fatal("wrong-domain discount reached simulation")
 			}
 		})
+	}
+}
+
+func TestPlanAwardNamesTheFailedCheck(t *testing.T) {
+	allowOther, err := tokenpolicy.New(tokenpolicy.Permissioned, []common.Address{common.HexToAddress("0xbad")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	singleRoute, err := tokenpolicy.New(tokenpolicy.Permissioned, []common.Address{tIn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		policy    tokenpolicy.Policy
+		maxAssets string
+		deadline  int64
+		want      string
+	}{
+		{name: "token policy", policy: allowOther, maxAssets: "900", want: "token policy disallows input token " + tIn.Hex()},
+		{name: "expired", maxAssets: "900", deadline: 1, want: "order expired: deadline 1 is not after chain time"},
+		{name: "below required on a single route", policy: singleRoute, maxAssets: "455",
+			want: "token policy requires a single route for " + tIn.Hex() + " [routes: " + vlt.Hex() + ": unreserved 455 below required 456]"},
+		{name: "no capacity, no split", maxAssets: "0",
+			want: "a split needs two connectors, 0 distinct listed [routes: " + vlt.Hex() + ": advertises no capacity]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := connectorExecutionFixture(t, connectortest.DiscountFixture())
+			order, _, backend := connectorExecutionAward(f.workflow.Filler)
+			if tc.deadline != 0 {
+				order.Request.Deadline = big.NewInt(tc.deadline)
+			}
+			s := Solver{Engine: &filler.Engine{Routes: connector.NewRoutes(f.workflow, []common.Address{common.HexToAddress("0x43")}), Workflow: f.workflow, Spends: connector.NewSpendLedger()}, backend: backend, tokenPolicy: tc.policy}
+			if err := s.Initialize(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			item := discounts.ListItem{DiscountPrecision: connector.PrecisionText, Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
+				Collateral: tOut.Hex(), DiscountID: connectortest.DiscountID().Hex(), MaxAssets: tc.maxAssets}
+			intent, err := prepareAtHead(t, &s, awardRow(t, order), []discounts.ListItem{item})
+			if err == nil || intent != nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("intent=%v err=%v, want %q", intent, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestAwardSkipLogsAtInfoOnlyWhenTheCheckChanges(t *testing.T) {
+	var levels []string
+	ctx := observability.WithLogger(t.Context(), funcr.NewJSON(func(obj string) {
+		var line struct {
+			V      int    `json:"level"`
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal([]byte(obj), &line); err != nil {
+			t.Fatal(err)
+		}
+		levels = append(levels, fmt.Sprintf("v%d %s", line.V, line.Reason))
+	}, funcr.Options{Verbosity: 1}))
+	s, backend, _ := awardSolver(t, &fillertest.Sender{})
+	pass := awardPass{orderID: "award", reserve: true}
+	elapsed := "fill deadline elapsed during preparation: order expiry 1000, chain time 990 observed 12ms ago"
+	later := "fill deadline elapsed during preparation: order expiry 1000, chain time 1002 observed 1.5s ago"
+	first := "0x0000000000000000000000000000000000000042: unreserved 455 below required 456"
+	other := "0x0000000000000000000000000000000000000052: unreserved 455 below required 456"
+	for _, reason := range []string{elapsed, elapsed, later, first, other} {
+		s.logSkip(ctx, pass, reason)
+	}
+	// Only the values changed, then the route did.
+	if want := []string{"v0 " + elapsed, "v1 " + elapsed, "v1 " + later, "v0 " + first, "v0 " + other}; !slices.Equal(levels, want) {
+		t.Fatalf("levels = %v, want %v", levels, want)
+	}
+	backend.rows = nil
+	if _, err := s.pollAwards(t.Context(), false); err != nil || len(s.skipped) != 0 {
+		t.Fatalf("complete poll kept skip state for a closed award: %v %v", s.skipped, err)
+	}
+}
+
+func TestAwardFeedSkipsAndReleasesAreLogged(t *testing.T) {
+	var lines []string
+	ctx := observability.WithLogger(t.Context(), funcr.NewJSON(func(obj string) {
+		var line struct {
+			Msg     string `json:"msg"`
+			OrderID string `json:"orderId"`
+			Reason  string `json:"reason"`
+			Error   string `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(obj), &line); err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, strings.Join([]string{line.Msg, line.OrderID, line.Reason + line.Error}, "|"))
+	}, funcr.Options{Verbosity: 1}))
+	s, backend, _ := awardSolver(t, &fillertest.Sender{})
+	unnamed := backend.rows[0]
+	unnamed.OrderId = ""
+	backend.rows = append(backend.rows, backend.rows[0], unnamed)
+	if _, err := s.pollAwards(ctx, false); err != nil || !s.Spends.Queued("award") {
+		t.Fatalf("award was not reserved: %v", err)
+	}
+	backend.rows = nil
+	if _, err := s.pollAwards(ctx, false); err != nil || s.Spends.Queued("award") {
+		t.Fatalf("closed award kept its reservation: %v", err)
+	}
+	for _, want := range []string{
+		"RFQ award skipped|award|repeated in the awarded orders feed",
+		"RFQ award skipped||awarded order has no orderId",
+		"RFQ award reservation released|award|order left the awarded orders feed",
+	} {
+		if !slices.Contains(lines, want) {
+			t.Fatalf("missing log %q in %v", want, lines)
+		}
 	}
 }

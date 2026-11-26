@@ -582,6 +582,8 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
   `getAmountOut` in one multicall and checks that they agree. When the token decimals make a price
   probe impossible, the order-sized result identifies the integer price directly. Fill sizing,
   payout and webhook validation then use the adapter's two floors at each leg's input amount.
+  When a direct leg absorbs remaining input, it reprices that final amount and caps the output
+  at the capacity left after the other legs' reservations.
   A signed discount below the adapter's current minimum is dropped, since the adapter reverts it.
   A direct leg prices at the
   higher of its entry's discount and the current minimum. The field is required and replaces `maxRate`, so
@@ -755,6 +757,20 @@ proof. This never delays serving or adds arbitrary input RPCs. Policy gates dire
 zero liquidity does not invalidate a resolved structural route. No counter reset, learned request
 registry or token cap is introduced. Cardinality follows supported route history × fixed outcomes,
 not quote IDs/count. Replica-local award observations are not globally unique economic wins.
+
+### Rejection reasons
+
+Every quote decline, fill skip and order failure names the check that failed and the values it
+compared, in its log line, its span decline and the order's `LastError`. Inventory dropped before
+the strategy (pair mismatch, discount offer filters, adapter quote and discount checks, connector
+checks, no unreserved capacity) is recorded on a per-plan `inventoryDrops` trace: each drop logs
+at V(1), and the plan keeps counts by reason plus the last drop with its values. A fill whose
+strategy fails appends a summary to its failure reason:
+`(<n> configured vaults, <a> of <r> direct inventories authorized, <d> discount inventories
+[(list discounts failed: <err>)], <c> candidates from <i> inventories, dropped: <reason> x<k>, ...;
+last: <decline with values>)`. A `listDiscounts` failure no longer silently empties the discount
+set; it shows up in that summary while the fill proceeds on direct inventory. Quote-path declines
+name only configured adapters, never unproven request tokens.
 
 ### Per-vault Merkle authority
 

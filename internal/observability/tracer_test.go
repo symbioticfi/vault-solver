@@ -291,3 +291,14 @@ func TestEndRedactsURLsFromRecordedErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestDeclineRedactsURLs(t *testing.T) {
+	rec := tracetest.Install(t)
+	ctx, end := observability.NewTracer("test", "oev").Start(t.Context(), "bid")
+	observability.Decline(ctx, "skipped", "webhook timeout at https://webhook.invalid/synthetic-path")
+	end(nil)
+	got, count := tracetest.EventAttr(tracetest.Ended(t, rec, "bid"), "declined", "reason")
+	if count != 1 || got != "webhook timeout at https://webhook.invalid" {
+		t.Fatal("decline event did not redact the URL path")
+	}
+}

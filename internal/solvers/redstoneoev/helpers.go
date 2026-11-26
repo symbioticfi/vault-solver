@@ -3,21 +3,8 @@ package redstoneoev
 import (
 	"math/big"
 
-	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
-
-func allSuccess(res []chain.CallResult, expectedLen int) bool {
-	if len(res) != expectedLen {
-		return false
-	}
-	for i := range res {
-		if !res[i].Success {
-			return false
-		}
-	}
-	return true
-}
 
 func cloneBig(v *big.Int) *big.Int {
 	if v == nil {

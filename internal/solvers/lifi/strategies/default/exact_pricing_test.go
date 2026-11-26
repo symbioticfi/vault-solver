@@ -80,7 +80,7 @@ func TestPriceQuoteRangeNeverOverquotesExactlyPricedLegs(t *testing.T) {
 		for _, bounds := range [][2]int64{{1, 400}, {400, 900}, {1, 800}} {
 			lower := new(big.Int).Mul(big.NewInt(bounds[0]), token)
 			upper := new(big.Int).Mul(big.NewInt(bounds[1]), token)
-			quoteRange, err := strategy.priceQuoteRange(
+			quoteRange, _, err := strategy.priceQuoteRange(
 				candidates, routes, lower, upper, pricing.MaxCost(routes, private), routes, pricing,
 			)
 			if err != nil || quoteRange == nil {

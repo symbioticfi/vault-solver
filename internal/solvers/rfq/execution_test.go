@@ -16,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
@@ -28,6 +29,7 @@ type fakeBackend struct {
 	order        *backendOrder
 	discount     *resolveDiscountResponse
 	discounts    *discountsResponse
+	discountsErr error
 	resolveCalls int
 	listCalls    int
 	orderListErr error
@@ -51,6 +53,9 @@ func (f *fakeBackend) resolveDiscount(context.Context, string) (*resolveDiscount
 
 func (f *fakeBackend) listDiscounts(context.Context) (*discountsResponse, error) {
 	f.listCalls++
+	if f.discountsErr != nil {
+		return nil, f.discountsErr
+	}
 	if f.discounts == nil {
 		return &discountsResponse{}, nil
 	}
@@ -82,16 +87,17 @@ func (f *fakeRecoveryReader) readQuoteCandidates(
 	tokenOut common.Address,
 	amountIn *big.Int,
 	pending pendingReservations,
+	trace liquidstrategies.DecisionTrace,
 ) ([]liquidlane.QuoteCandidate, error) {
 	return (&fakeQuoteCandidateReader{out: f.quoteOut}).readQuoteCandidates(
-		ctx, inventory, tokenIn, tokenOut, amountIn, pending,
+		ctx, inventory, tokenIn, tokenOut, amountIn, pending, trace,
 	)
 }
 
 func (f *fakeRecoveryReader) readPermissionedVaultInventories(
 	context.Context, common.Address, common.Address, []recoveryVault,
-) ([]solverInventory, error) {
-	return f.permInv, f.permErr
+) ([]solverInventory, int, error) {
+	return f.permInv, len(f.permInv), f.permErr
 }
 
 func (f *fakeRecoveryReader) resolveVaults(_ context.Context, vaults []recoveryVault) ([]recoveryVault, error) {
@@ -301,8 +307,51 @@ func TestExecution_DoesNotAdmitFillWhoseDeadlineElapsedDuringPlanning(t *testing
 	}
 	rec := st.order("o1")
 	if rec == nil || rec.Status != statusFailed ||
-		!strings.Contains(rec.LastError, "deadline elapsed before submission") {
-		t.Fatalf("status = %+v, want deadline failure", rec)
+		!strings.Contains(rec.LastError, "deadline elapsed before submission: order deadline 2100-01-01T00:00:00Z") ||
+		!strings.Contains(rec.LastError, "planning took 10s") {
+		t.Fatalf("status = %+v, want deadline failure naming the order deadline and planning time", rec)
+	}
+}
+
+// A fill left without candidates fails with what it read and why each item was dropped.
+func TestExecution_EmptyFillNamesInventoryRead(t *testing.T) {
+	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
+	offer := func(adapter, tokenToRedeem common.Address) discountListItem {
+		return discountListItem{DiscountPrecision: "1000000", DiscountID: "0x" + strings.Repeat("a", 64),
+			Adapter: adapter.Hex(), TokenToRedeem: tokenToRedeem.Hex(), Collateral: tOut.Hex(),
+			CollateralDecimals: 6, Discount: "500", Deadline: 4_102_444_800, MaxAssets: "10000000"}
+	}
+	for name, tc := range map[string]struct {
+		discounts    []discountListItem
+		discountsErr error
+		want         string
+	}{
+		"dropped offers": {
+			discounts: []discountListItem{offer(rogue, tIn), offer(vlt, tOut)},
+			want: "no fill candidates (1 configured vaults, 0 of 0 direct inventories authorized, " +
+				"0 discount inventories, 0 candidates from 0 inventories, dropped: " +
+				"discount adapter is not whitelisted x1, discount tokenToRedeem is not the order tokenIn x1; last: ",
+		},
+		"list failure": {
+			discountsErr: errors.New("backend down"),
+			want:         "0 discount inventories (list discounts failed: backend down), 0 candidates from 0 inventories, dropped: none",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			st, be := fillFixtures(t)
+			be.discounts = &discountsResponse{Discounts: tc.discounts}
+			be.discountsErr = tc.discountsErr
+			e := newExec(t, st, be, &fakeTxm{result: confirmedTxResult()})
+			e.whitelist = buildAdapterWhitelist(true, e.vaults)
+			e.reader.(*fakeRecoveryReader).permInv = nil
+			e.strategy = newDefaultTestStrategy()
+
+			syncCycle(t.Context(), e)
+
+			if rec := st.order("o1"); rec == nil || rec.Status != statusFailed || !strings.Contains(rec.LastError, tc.want) {
+				t.Fatalf("order = %+v, want failure containing %q", rec, tc.want)
+			}
+		})
 	}
 }
 
@@ -606,20 +655,34 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 
 	e := newExec(t, st, be, &fakeTxm{})
 	e.whitelist = buildAdapterWhitelist(true, []recoveryVault{{Adapter: vlt}})
-	out := e.discountInventories(context.Background(), tIn, nil)
+	trace, lastDecline := liquidstrategies.DecisionTrace(nil).RecordDeclines()
+	out := discountInventoriesFor(t, e, trace)
 	if len(out) != 1 || out[0].Adapter != vlt {
 		t.Fatalf("whitelisted discountInventories = %+v, want only the listed adapter", out)
+	}
+	if got := lastDecline(); !strings.Contains(got, "reason=discount adapter is not whitelisted") ||
+		!strings.Contains(got, "adapter="+rogue.Hex()) {
+		t.Fatalf("rogue adapter decline = %q", got)
 	}
 
 	// Disabled via config (nil whitelist): both discounts survive.
 	e.whitelist = buildAdapterWhitelist(false, []recoveryVault{{Adapter: vlt}})
-	out = e.discountInventories(context.Background(), tIn, nil)
+	out = discountInventoriesFor(t, e, nil)
 	if len(out) != 2 {
 		t.Fatalf("unfiltered discountInventories = %d entries, want 2", len(out))
 	}
 	if out[0].CapacityID == out[1].CapacityID {
 		t.Fatalf("unknown discount vaults share capacity id %q", out[0].CapacityID)
 	}
+}
+
+func discountInventoriesFor(t *testing.T, e *executionService, trace liquidstrategies.DecisionTrace) []solverInventory {
+	t.Helper()
+	out, err := e.discountInventories(t.Context(), tIn, nil, trace)
+	if err != nil {
+		t.Fatalf("discount inventories: %v", err)
+	}
+	return out
 }
 
 func TestExecution_DiscountInventoriesSkipsExpired(t *testing.T) {
@@ -633,8 +696,13 @@ func TestExecution_DiscountInventoriesSkipsExpired(t *testing.T) {
 	e := newExec(t, st, be, &fakeTxm{})
 	e.now = func() time.Time { return time.Unix(2, 0) }
 	e.whitelist = buildAdapterWhitelist(true, []recoveryVault{{Adapter: vlt}})
-	if out := e.discountInventories(context.Background(), tIn, nil); len(out) != 0 {
+	trace, lastDecline := liquidstrategies.DecisionTrace(nil).RecordDeclines()
+	if out := discountInventoriesFor(t, e, trace); len(out) != 0 {
 		t.Fatalf("expired discount inventories = %+v", out)
+	}
+	if reason := lastDecline(); !strings.Contains(reason, "expired") ||
+		!strings.Contains(reason, "deadline=1") || !strings.Contains(reason, "now=2") {
+		t.Fatalf("expired discount decline = %q", reason)
 	}
 }
 
@@ -660,7 +728,7 @@ func TestExecution_DiscountInventoriesExcludeConnectors(t *testing.T) {
 			// A discount-only filler can discover native adapters, but must not treat a
 			// connector as one merely because its discount fits the native numeric range.
 			e.whitelist = nil
-			inventory := e.discountInventories(t.Context(), tIn, nil)
+			inventory := discountInventoriesFor(t, e, nil)
 			if len(inventory) != 1 || inventory[0].Adapter != vlt || inventory[0].DiscountID == nil ||
 				inventory[0].DiscountID.Hex() != nativeID {
 				t.Fatalf("native recovery inventory = %+v, want only native discount %s", inventory, nativeID)
@@ -845,7 +913,7 @@ func TestExecution_DiscountInventoriesCarrySnapshotBlock(t *testing.T) {
 	}}}
 	e := newExec(t, newStore(func() time.Time { return time.Unix(0, 0) }), be, &fakeTxm{})
 
-	inv := e.discountInventories(t.Context(), tIn, nil)
+	inv := discountInventoriesFor(t, e, nil)
 
 	if len(inv) != 1 || inv[0].BlockNumber != 4242 {
 		t.Fatalf("discount inventory = %+v, want one item at block 4242", inv)

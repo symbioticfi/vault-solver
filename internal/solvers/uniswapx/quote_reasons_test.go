@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -79,7 +80,8 @@ func TestQuoteValidationReasonsAndPrecedence(t *testing.T) {
 		s := newQuoteTestSolver(t, in, &quoteTestStrategy{})
 		s.warmupUntil.Store(time.Now().Add(time.Hour).Unix())
 		response, err := s.quote(t.Context(), quoteRequest{})
-		if err != nil || response.declineReason != quoteDeclineBlocked {
+		if err != nil || response.declineReason != quoteDeclineBlocked ||
+			!strings.HasPrefix(response.declineDetail, "startup warmup blocks quotes until ") {
 			t.Fatalf("response=%+v err=%v", response, err)
 		}
 	})
@@ -91,10 +93,100 @@ func TestQuoteValidationReasonsAndPrecedence(t *testing.T) {
 		}
 		s.cfg.TokenPolicy = policy
 		response, err := s.quote(t.Context(), validQuoteRequest(in, out))
-		if err != nil || response.declineReason != quoteDeclinePairOutOfScope {
+		if err != nil || response.declineReason != quoteDeclinePairOutOfScope ||
+			response.declineDetail != "token policy does not allow tokenIn" {
 			t.Fatalf("response=%+v err=%v", response, err)
 		}
 	})
+}
+
+func TestQuoteStateChangeNamesTheCondition(t *testing.T) {
+	in := common.HexToAddress("0x01")
+	for _, tc := range []struct {
+		name   string
+		change func(context.CancelFunc, *Solver, *quoteState)
+		want   string
+	}{
+		{"unchanged", func(context.CancelFunc, *Solver, *quoteState) {}, ""},
+		{"context", func(cancel context.CancelFunc, _ *Solver, _ *quoteState) { cancel() }, "quote context ended: context canceled"},
+		{"epoch", func(_ context.CancelFunc, s *Solver, _ *quoteState) { s.quoteEpoch.Store(2) }, "quote epoch moved from 0 to 2"},
+		{"replaced", func(_ context.CancelFunc, s *Solver, _ *quoteState) { s.quoteState.Store(&quoteState{}) }, "quote state was replaced"},
+		{"capacity", func(_ context.CancelFunc, s *Solver, _ *quoteState) {
+			s.capacity.Set("order", liquidlane.CapacityReservations{"budget": big.NewInt(1)})
+		}, "capacity revision moved from 0 to 1"},
+		{"wall expiry", func(_ context.CancelFunc, _ *Solver, state *quoteState) {
+			state.expiresAt = time.Now().Add(-time.Second)
+		}, "quote state expired at "},
+		{"chain expiry", func(_ context.CancelFunc, s *Solver, state *quoteState) {
+			s.chainTime.Store(state.expiresAt.Add(time.Minute).Unix())
+		}, fmt.Sprintf("quote state expired at %d, chain time ", time.Now().Add(time.Minute).Unix())},
+		{"blocked", func(_ context.CancelFunc, s *Solver, _ *quoteState) {
+			s.localBlockUntil.Store(time.Now().Add(time.Hour).Unix())
+		}, "local fade breaker blocks quotes until "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newQuoteTestSolver(t, in, &quoteTestStrategy{})
+			state := s.quoteState.Load()
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			tc.change(cancel, s, state)
+			got := s.quoteStateChange(ctx, 0, state, 0)
+			if tc.want == "" && got != "" || !strings.HasPrefix(got, tc.want) {
+				t.Fatalf("change = %q, want prefix %q", got, tc.want)
+			}
+			if tc.name == "wall expiry" && !strings.Contains(got, "wall time") {
+				t.Fatalf("wall expiry reported as %q", got)
+			}
+		})
+	}
+}
+
+func TestQuoteValidationDetailNamesTheField(t *testing.T) {
+	in, out := common.HexToAddress("0x01"), common.HexToAddress("0x02")
+	for _, tc := range []struct {
+		change func(*quoteRequest)
+		want   string
+	}{
+		{func(r *quoteRequest) { r.RequestID = "" }, "requestId is empty"},
+		{func(r *quoteRequest) { r.QuoteID = "" }, "quoteId is empty"},
+		{func(r *quoteRequest) { r.NumOutputs = 0 }, "numOutputs 0 is below 1"},
+		{func(r *quoteRequest) { r.TokenOutChainID = 8453 }, "tokenOutChainId 8453 is not chain 1"},
+		{func(r *quoteRequest) { r.Swapper = "bad" }, "swapper is not a hex address"},
+		{func(r *quoteRequest) { r.TokenOut = "0x12" }, "tokenOut is not a hex address"},
+	} {
+		s := newQuoteTestSolver(t, in, &quoteTestStrategy{})
+		r := validQuoteRequest(in, out)
+		tc.change(&r)
+		if _, got := s.validateQuoteRequest(r); got != tc.want {
+			t.Fatalf("detail = %q, want %q", got, tc.want)
+		}
+	}
+}
+
+func TestQuoteDeclineDetailNamesFailedCheck(t *testing.T) {
+	in, out := common.HexToAddress("0x01"), common.HexToAddress("0x02")
+	for _, tc := range []struct {
+		name   string
+		change func(*Solver, *quoteRequest)
+		want   string
+	}{
+		{"identical pair", func(_ *Solver, r *quoteRequest) { r.TokenOut = r.TokenIn }, "tokenIn equals tokenOut"},
+		{"zero output", func(_ *Solver, r *quoteRequest) { r.TokenOut = (common.Address{}).Hex() }, "tokenOut is the zero address"},
+		{"no state", func(s *Solver, _ *quoteRequest) { s.quoteState.Store(nil) }, "no quote state published"},
+		{"epoch", func(s *Solver, _ *quoteRequest) { s.quoteEpoch.Store(3) }, "quote state epoch 0 differs from current epoch 3"},
+		{"expired", func(s *Solver, _ *quoteRequest) { s.quoteState.Load().expiresAt = time.Unix(5, 0) }, "quote state expired at 5, now "},
+		{"no inventory route", func(*Solver, *quoteRequest) {}, "directed pair has no inventory route"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newQuoteTestSolver(t, in, &quoteTestStrategy{})
+			r := validQuoteRequest(in, out)
+			tc.change(s, &r)
+			response, err := s.quote(t.Context(), r)
+			if err != nil || !strings.HasPrefix(response.declineDetail, tc.want) {
+				t.Fatalf("detail=%q err=%v; want prefix %q", response.declineDetail, err, tc.want)
+			}
+		})
+	}
 }
 
 func TestQuoteSupportedRequestsRemainAccepted(t *testing.T) {
@@ -127,9 +219,10 @@ func TestQuoteLocalPlannerReportsRealDeclinesWithoutDebugLogging(t *testing.T) {
 				name     string
 				capacity int64
 				want     quoteDeclineReason
+				detail   string
 			}{
-				{"no routes", 0, quoteDeclineNoMatchingRoutes},
-				{"capacity", 50, quoteDeclineInsufficientCapacity},
+				{"no routes", 0, quoteDeclineNoMatchingRoutes, "directed pair has no inventory route"},
+				{"capacity", 50, quoteDeclineInsufficientCapacity, "reason=insufficient-capacity"},
 			} {
 				t.Run(name+mode+tc.name, func(t *testing.T) {
 					local, err := defaultstrategy.New(defaultstrategy.Config{Name: name})
@@ -147,8 +240,8 @@ func TestQuoteLocalPlannerReportsRealDeclinesWithoutDebugLogging(t *testing.T) {
 					r := validQuoteRequest(in, out)
 					r.Type = mode
 					response, err := s.quote(t.Context(), r)
-					if err != nil || response.declineReason != tc.want {
-						t.Fatalf("response=%+v err=%v; want %s", response, err, tc.want)
+					if err != nil || response.declineReason != tc.want || !strings.Contains(response.declineDetail, tc.detail) {
+						t.Fatalf("response=%+v err=%v; want %s (%s)", response, err, tc.want, tc.detail)
 					}
 				})
 			}
@@ -174,11 +267,44 @@ func TestStrategyDeclineCaptureIsBoundedAndOrderIndependent(t *testing.T) {
 		if got := d.reason(); got != want {
 			t.Fatalf("reasons=%v got=%s want=%s", reasons, got, want)
 		}
+		wantDetail := "strategy returned no quote without recording a decline"
+		if len(reasons) > 0 {
+			wantDetail = "reason=" + strings.Join(reasons, "; reason=")
+		}
+		if got := d.detail(); got != wantDetail {
+			t.Fatalf("reasons=%v detail=%q want=%q", reasons, got, wantDetail)
+		}
 	}
 	for _, reason := range []string{"no-matching-routes", "no-candidates", "amount-below-minimum", "no-allocation", "gas-exceeds-output", "minimum-input-cannot-cover-output"} {
 		if got := strategyQuoteDeclineReason(reason); got == quoteDeclineStrategy || boundedQuoteRejectionReason(string(got)) == "unknown" {
 			t.Fatalf("unmapped %q", reason)
 		}
+	}
+}
+
+func TestQuoteDeclineDetailLimitsExamplesAndBytes(t *testing.T) {
+	for _, value := range []string{"small", strings.Repeat("é", 2048)} {
+		d := &quoteStrategyDeclines{}
+		trace := d.trace(nil)
+		for i := range 32 {
+			trace.Decline("quote", "insufficient-capacity", "candidate", i, "value", value)
+		}
+		trace.Decline("quote", "gas-exceeds-output")
+		detail := d.detail()
+		if len(detail) > 2048 || strings.Count(detail, "candidate=") > 8 ||
+			!strings.Contains(detail, "omitted") || d.reason() != quoteDeclineStrategy {
+			t.Fatalf("detail bytes=%d examples=%d reason=%s", len(detail), strings.Count(detail, "candidate="), d.reason())
+		}
+	}
+}
+
+func TestWebhookNullQuoteKeepsReasonWithoutLocalInventory(t *testing.T) {
+	in, out := common.Address{1}, common.Address{2}
+	s := newQuoteTestSolver(t, in, &quoteTestStrategy{})
+	s.cfg.Strategy.Name = types.WebhookName
+	response, err := s.quote(t.Context(), validQuoteRequest(in, out))
+	if err != nil || response.pairInScope || response.declineDetail != "webhook returned a null quote" {
+		t.Fatalf("out-of-inventory webhook decline = %+v, err %v", response, err)
 	}
 }
 
