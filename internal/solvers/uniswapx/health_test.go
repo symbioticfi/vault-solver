@@ -1,7 +1,9 @@
 package uniswapx
 
 import (
+	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,8 +65,37 @@ func TestReadyRequiresFreshDeliveryAndQuoteState(t *testing.T) {
 	}
 	solver.warmupUntil.Store(0)
 	solver.lastExclusivePoll.Store(now.Add(-time.Minute).Unix())
-	if solver.ready() {
-		t.Fatal("solver with stale exclusive delivery should not be ready")
+	if got := solver.readyProblem(); !strings.HasPrefix(got, "last exclusive order poll at ") || !strings.HasSuffix(got, "old, max 5s") {
+		t.Fatalf("solver with stale exclusive delivery should not be ready: %q", got)
+	}
+}
+
+func TestReadyProblemNamesTheFailedCheck(t *testing.T) {
+	now := time.Now()
+	solver := &Solver{cfg: &Config{OrderServer: OrderServerConfig{PollInterval: time.Second}}}
+	if got := solver.readyProblem(); got != "no successful exclusive order poll yet" {
+		t.Fatalf("problem = %q", got)
+	}
+	solver.lastExclusivePoll.Store(now.Unix())
+	for _, tc := range []struct {
+		change func()
+		want   string
+	}{
+		{func() { solver.exclusiveStateUnknown.Store(true) }, "exclusive order state is unknown until a poll reconciles it"},
+		{func() { solver.exclusiveStateUnknown.Store(false); solver.exclusiveOpenInGrace.Store(true) }, "an exclusive order is still open after its exclusivity ended"},
+		{func() { solver.exclusiveOpenInGrace.Store(false) }, "no quote state published"},
+		{func() { solver.quoteState.Store(&quoteState{expiresAt: now.Add(time.Minute)}) }, "quote state has no inventory"},
+		{func() {
+			solver.quoteState.Store(&quoteState{epoch: 1, expiresAt: now.Add(time.Minute), inventory: []liquidlane.Inventory{{}}})
+		}, "quote state epoch 1 differs from current epoch 0"},
+		{func() {
+			solver.quoteState.Store(&quoteState{expiresAt: time.Unix(5, 0), inventory: []liquidlane.Inventory{{}}})
+		}, fmt.Sprintf("quote state expired at 5, now %d", now.Unix())},
+	} {
+		tc.change()
+		if got := solver.readyProblem(); got != tc.want {
+			t.Fatalf("problem = %q, want %q", got, tc.want)
+		}
 	}
 }
 

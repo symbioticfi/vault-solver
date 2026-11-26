@@ -108,7 +108,10 @@ It runs either in `external` mode (the open-source filler; quoting and filling s
 own adapters) or `internal` mode (Symbiotic-internal; adds the private discounts flow). The caller EOA
 must be an authorized caller of the RFQ `Executor` (its `setCallers` allowlist, granted by the owner).
 Native mode uses the deployed Executor callback that executes its swap arrays;
-extra callback calls remain empty. Merkle mode uses the generic-call Executor and
+extra callback calls remain empty. Native fills size and validate each leg at the adapter's
+current rounded payout. A direct leg can take remaining input with its payout capped at
+the available capacity. Strategy quote declines include their reason in the solver logs.
+Merkle mode uses the generic-call Executor and
 encodes its recipe calls explicitly. Keep each deployment on its matching mode;
 upgrading the solver does not require replacing native adapters or Executors.
 External mode also fails startup unless that executor has direct `owner`/`marketMaker`/`isFiller`
@@ -119,6 +122,8 @@ Configure `rfq-filler` with the existing `adapters` list for native
 pricing and fills, or with `recipeExecutors` for Merkle connector pricing and fills.
 Setting both fails startup. The Merkle mode uses `curator` for permissions and keeps pending execution in RAM.
 One award can use multiple connectors, with capacity shared by funding account and asset.
+Each recipe uses the connector's full rounded payout, which must cover the signed
+order output together with the other legs.
 A Merkle filler keeps polling for awards and reserving their payouts during signing and
 confirmation. It quotes against the unreserved balance and submits fills sequentially.
 Quoting starts after the first completed reservation refresh and pauses if it goes stale for
@@ -438,7 +443,9 @@ signed-discount resolution, calldata construction, or preflight before the trans
 result rejected before the worker lifecycle does not count toward the local fill breaker and is reported as
 `solver_bot_txmanager_admission_rejections_total{label="uniswapx-fill"}` rather than a terminal fill
 failure. `GET /ready` exposes that state and
-also returns not-ready when the latest snapshot has no quotable inventory;
+also returns not-ready when the latest snapshot has no quotable inventory. The `503` body stays generic
+because the quote port is published to the order provider; the failed check is logged as `not ready`
+with a `reason` at debug level;
 `GET /health` and its probe-friendly alias `GET /healthz` remain liveness-only.
 
 Every valid exclusive order assigned to the executor is tracked through `decayStartTime`. After that
@@ -1017,6 +1024,8 @@ not an order-ID label. Optional startup symbol/decimals warm-up is cancellable b
 cannot hold the HTTP/order loops behind a symbol RPC. Newly warmed trusted tokens emit
 `trusted token metadata` with chain/address and verified fields; unknown fields stay absent.
 LI.FI `discount_api_error` distinguishes a failed lookup for physical inventory from no inventory.
+A LI.FI `strategy_declined` rejection log carries `detail`, the check the default strategy failed for that
+pair (for example `quote maximum 5 is below minimum amount 10`); declined fills log the same kind of `reason`.
 
 UniswapX `quote returned` and RFQ `quote response returned` prove a successful local response write,
 not client receipt. Planner decisions, failed writes, assignments and confirmed fills are distinct

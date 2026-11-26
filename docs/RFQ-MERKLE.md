@@ -73,7 +73,10 @@ The solver tries a single connector first. When it needs multiple connectors, it
 legs using the shared Liquid Lane allocator and the backend's advertised capacity,
 clipped by each connector's current `remainingAssets(token)` policy budget and
 shared account/asset capacity. Each leg uses its own exact on-chain payout, and the
-legs must cover the signed input and output together. Capacity calculation belongs
+legs must cover the signed input and output together. For a single connector,
+the signed output is the minimum for the order. Preparation uses the connector's
+full rounded payout for the recipe approval, balance checks and spend reservation.
+Capacity calculation belongs
 to the backend. It estimates funding from each recipe's reads and checks current
 roles with batched RPC calls. The complete outer settlement simulation checks ordered
 withdrawals and shared liquidity before submission.

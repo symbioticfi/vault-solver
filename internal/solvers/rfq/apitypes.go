@@ -1,6 +1,7 @@
 package rfq
 
 import (
+	"fmt"
 	"math/big"
 	"strconv"
 	"time"
@@ -70,11 +71,13 @@ const (
 type parsedQuote struct {
 	req strategyRequest
 	inv []solverInventory
+	// declined names why a well-formed request is not quotable here; empty when it is.
+	declined string
 }
 
-// toStrategy validates and parses the request. A non-nil error is a malformed payload (→ 400). A nil
-// result with nil error means the request is well-formed but not quotable here — wrong chain or no
-// adapters — and the caller replies 204.
+// toStrategy validates and parses the request. A non-nil error is a malformed payload (→ 400). A
+// result with declined set is well-formed but not quotable here (wrong chain or no resolved
+// adapter), and the caller replies 204.
 func (q *quoteRequest) toStrategy(chainID int64, resolve quoteRouteResolver) (*parsedQuote, error) {
 	// Schema-level validation (malformed → 400).
 	if q.Type != quoteTypeExactInput {
@@ -116,10 +119,17 @@ func (q *quoteRequest) toStrategy(chainID int64, resolve quoteRouteResolver) (*p
 	}
 
 	// Quote-logic checks (well-formed but not for us → 204).
-	if q.TokenInChainID != chainID || q.TokenOutChainID != chainID || len(inv) == 0 {
-		return nil, nil
+	var declined string
+	switch {
+	case q.TokenInChainID != chainID:
+		declined = fmt.Sprintf("tokenInChainId %d is not chain %d", q.TokenInChainID, chainID)
+	case q.TokenOutChainID != chainID:
+		declined = fmt.Sprintf("tokenOutChainId %d is not chain %d", q.TokenOutChainID, chainID)
+	case len(inv) == 0:
+		declined = fmt.Sprintf("none of %d adapters resolves to a configured route", len(q.Adapters))
 	}
 	return &parsedQuote{
+		declined: declined,
 		req: strategyRequest{
 			RequestID: q.RequestID,
 			QuoteID:   q.QuoteID,

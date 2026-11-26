@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
@@ -31,6 +32,12 @@ func LiquidLaneGasEnvelope() strategies.GasEnvelope {
 	}
 }
 
+// ErrFillDeclined marks a DecideFill error that declines the order rather than failing; the
+// wrapping message names the check that failed and the values it compared.
+var ErrFillDeclined = errors.New("fill declined")
+
+// Strategy decides quotes and fills. DecideQuote returns a nil quote to decline and records why on
+// input.Trace; DecideFill declines by returning an error wrapping ErrFillDeclined.
 type Strategy interface {
 	DecideQuote(ctx context.Context, input QuoteInput) (*Quote, error)
 	DecideFill(ctx context.Context, input FillInput) (*FillPlan, error)

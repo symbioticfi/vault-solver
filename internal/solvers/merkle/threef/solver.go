@@ -37,7 +37,7 @@ func (s *Solver) Run(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		logMintIteration(ctx, s.keeper.Tick(ctx))
+		logMintIteration(ctx, s.tickMint(ctx))
 
 		if s.keeper.Sender == nil || !s.keeper.Sender.Busy() {
 			run, cancel := context.WithTimeout(ctx, operationTimeout)
@@ -53,6 +53,12 @@ func (s *Solver) Run(ctx context.Context) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (s *Solver) tickMint(ctx context.Context) (err error) {
+	ctx, end := tracer.Start(ctx, "threef-merkle.mint.tick")
+	defer func() { end(err) }()
+	return s.keeper.Tick(ctx)
 }
 
 func logMintIteration(ctx context.Context, err error) {

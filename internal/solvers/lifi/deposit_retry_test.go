@@ -1,6 +1,8 @@
 package lifi
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,8 +22,9 @@ func TestOrderDepositRetryQueueIsBoundedAndCoalescesReplays(t *testing.T) {
 	if queue.len() != 1 || len(queue.byKey) != 1 {
 		t.Fatalf("coalesced queue: ready=%d tracked=%d, want 1/1", queue.len(), len(queue.byKey))
 	}
-	if err := queue.schedule(&submittedOrder{OrderID: "second"}, now); !errors.Is(err, errOrderDepositRetryFull) {
-		t.Fatalf("overflow error = %v, want %v", err, errOrderDepositRetryFull)
+	if err := queue.schedule(&submittedOrder{OrderID: "second"}, now); !errors.Is(err, errOrderDepositRetryFull) ||
+		!strings.Contains(err.Error(), "1 of 1 slots used") {
+		t.Fatalf("overflow error = %v, want %v naming slot use", err, errOrderDepositRetryFull)
 	}
 	if order := popOrderDepositRetry(t, queue, now.Add(initialOrderDepositRetryBackoff-time.Nanosecond)); order != nil {
 		t.Fatalf("order became ready before its backoff: %+v", order)
@@ -81,8 +84,9 @@ func TestOrderDepositRetryQueueStopsAtOrderDeadline(t *testing.T) {
 	if !ok || popOrderDepositRetry(t, queue, readyAt) != order {
 		t.Fatal("final retry before deadline was not ready")
 	}
-	if err := queue.schedule(order, readyAt); !errors.Is(err, errOrderDepositRetryExpired) {
-		t.Fatalf("deadline error = %v, want %v", err, errOrderDepositRetryExpired)
+	if err := queue.schedule(order, readyAt); !errors.Is(err, errOrderDepositRetryExpired) ||
+		!strings.Contains(err.Error(), fmt.Sprintf("is not after now %d", readyAt.Unix())) {
+		t.Fatalf("deadline error = %v, want %v naming the bound and now", err, errOrderDepositRetryExpired)
 	}
 	if queue.len() != 0 || len(queue.byKey) != 0 {
 		t.Fatalf("expired queue: ready=%d tracked=%d, want 0/0", queue.len(), len(queue.byKey))

@@ -2039,3 +2039,87 @@ func testSubmittedOrder(t *testing.T, cfg *Config, tokenIn, tokenOut common.Addr
 	}
 	return order
 }
+
+// probingDeclineStrategy declines with reservations and answers the unreserved probe with probe.
+type probingDeclineStrategy struct {
+	probe *types.FillPlan
+}
+
+func (probingDeclineStrategy) DecideQuotes(context.Context, types.QuoteInput) (types.QuoteOutput, error) {
+	return types.QuoteOutput{}, nil
+}
+
+func (probingDeclineStrategy) DecideFill(context.Context, types.FillInput) (*types.FillPlan, error) {
+	return nil, errors.Errorf("%w: reserved check failed", types.ErrFillDeclined)
+}
+
+func (s probingDeclineStrategy) DecideFillWithoutReservations(context.Context, types.FillInput) (*types.FillPlan, error) {
+	if s.probe == nil {
+		return nil, errors.Errorf("%w: unreserved check failed", types.ErrFillDeclined)
+	}
+	return s.probe, nil
+}
+
+func TestProcessOrderNamesEachFillDecline(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	plan := &types.FillPlan{Routes: []types.FillRoute{{
+		RouteID: "route-1", CapacityID: "capacity-1", Adapter: fixture.adapter,
+		AmountIn: big.NewInt(1_000_000), ExpectedAmountOut: big.NewInt(1_000_000),
+		MinAmountOut: big.NewInt(990_001), ReservedAmountOut: big.NewInt(1_000_000),
+	}}}
+	tests := map[string]struct {
+		reservations liquidlane.CapacityReservations
+		probe        *types.FillPlan
+		want         string
+	}{
+		"no pending reservations": {
+			want: "fill declined: reserved check failed",
+		},
+		"declined without reservations too": {
+			reservations: liquidlane.CapacityReservations{"capacity-1": big.NewInt(1)},
+			want: "declined with 1 pending reservation domains (fill declined: reserved check failed) " +
+				"and without them (fill declined: unreserved check failed)",
+		},
+		"unreserved plan avoids reserved capacity": {
+			reservations: liquidlane.CapacityReservations{"capacity-other": big.NewInt(1)},
+			probe:        plan,
+			want: "fill declined: reserved check failed; the 1-route plan without pending reservations " +
+				"uses none of the 1 reserved capacity domains",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			s := newProcessTestSolver(
+				fixture.cfg, fixture.caller, &fakeLifiTxSender{}, probingDeclineStrategy{probe: tt.probe},
+				fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
+			)
+			s.reader = fakeLifiReader{
+				status: lifiOrderStatusDeposited,
+				fillSnapshotsFn: func() []liquidlane.FillQuote {
+					return profitableFillSnapshots(fixture.tokenIn, fixture.tokenOut, fixture.adapter, 1_000_000)
+				},
+			}
+			if tt.reservations != nil {
+				s.capacity.Set("pending-order", tt.reservations)
+			}
+			var reasons []string
+			log := funcr.New(func(_, args string) {
+				if strings.Contains(args, `"order fill strategy declined"`) {
+					reasons = append(reasons, args)
+				}
+			}, funcr.Options{Verbosity: 1})
+			result := s.processOrderWithPending(
+				observability.WithLogger(t.Context(), log),
+				testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+				testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
+				nil,
+			)
+			if result.outcome != orderProcessingStrategyDeclined || result.err != nil {
+				t.Fatalf("result = %+v, want a clean strategy decline", result)
+			}
+			if len(reasons) != 1 || !strings.Contains(reasons[0], `"reason"="`+tt.want+`"`) {
+				t.Fatalf("decline logs = %q, want reason %q", reasons, tt.want)
+			}
+		})
+	}
+}

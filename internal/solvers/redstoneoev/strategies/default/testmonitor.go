@@ -166,8 +166,10 @@ func verifyAdapterPair(params map[common.Hash]MarketParams, adapterLoan common.A
 	return out
 }
 
-func (m *testMonitor) candidates(auction types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot) []evalItem {
-	return candidatesFromAuctionWithAdapter(m.log, m.snapshot(), auction, nowTs, adapter)
+func (m *testMonitor) candidates(
+	auction types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot, tally *rejectTally,
+) []evalItem {
+	return candidatesFromAuctionWithAdapter(m.log, m.snapshot(), auction, nowTs, adapter, tally)
 }
 
 func (m *testMonitor) snapshot() *snapshot {

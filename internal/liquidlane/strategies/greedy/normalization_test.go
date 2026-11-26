@@ -2,6 +2,7 @@ package greedy
 
 import (
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,16 +40,16 @@ func TestNormalizeOracleInventoryPricesEachPhysicalRoute(t *testing.T) {
 		quote(first, 1_500_000, 900_000), quote(second, 2_000_000, 800_000), quote(third, 2_000_000, 900_000),
 	}
 
-	got := NormalizeOracleInventory(amountIn, sources, physical)
+	got := NormalizeOracleInventory(amountIn, sources, physical, nil)
 	if len(got) != 3 || got[0].Rate.String() != "900000000000000000" || got[0].MaxAmountOut.String() != "1500000" ||
 		got[1].Rate.String() != "800000000000000000" || got[2].Rate.String() != "899100000000000000" {
 		t.Fatalf("normalized = %#v", got)
 	}
 }
 
-// A discount leg priced from the adapter quote at the order amount never predicts more than the
-// adapter pays and gives up at most one unit, across prices, decimals, discounts and sizes.
-func TestNormalizeOracleInventoryKeepsDiscountLegsWithinOneUnitOfPayout(t *testing.T) {
+// A discount leg priced from the adapter quote pays exactly what the adapter pays at the order
+// amount and never more at a smaller one, across prices, decimals, discounts and sizes.
+func TestNormalizeOracleInventoryPricesDiscountLegsAtExactPayout(t *testing.T) {
 	t.Parallel()
 	discountID := common.HexToHash("0xd")
 	for _, dec := range [][2]int{{18, 6}, {6, 6}, {18, 18}} {
@@ -67,16 +68,20 @@ func TestNormalizeOracleInventoryKeepsDiscountLegsWithinOneUnitOfPayout(t *testi
 						Inventory: liquidlane.DirectInventory(route, maxUint256ForTest(), nil), AmountIn: amountIn,
 						GrossAmountOut: gross, MaxAmountOut: gross, MinDiscount: new(big.Int),
 					}
-					got := NormalizeOracleInventory(amountIn, []liquidlane.Inventory{source}, []liquidlane.FillQuote{physical})
+					got := NormalizeOracleInventory(amountIn, []liquidlane.Inventory{source}, []liquidlane.FillQuote{physical}, nil)
 					if payout.Sign() == 0 {
 						continue
 					}
 					if len(got) != 1 {
 						t.Fatalf("amountIn %s: candidates = %d, want one", amountIn, len(got))
 					}
-					out := got[0].AmountOutFor(amountIn)
-					if out.Cmp(payout) > 0 || new(big.Int).Sub(payout, out).Cmp(big.NewInt(1)) > 0 {
+					if out := got[0].AmountOutFor(amountIn); out.Cmp(payout) != 0 {
 						t.Fatalf("amountIn %s: candidate prices %s, adapter pays %s", amountIn, out, payout)
+					}
+					part := new(big.Int).Div(amountIn, big.NewInt(3))
+					partPayout := liquidlane.AmountOutAfterDiscount(liquidlane.AmountOutForRate(part, price, dec[0], dec[1]), big.NewInt(discount))
+					if out := got[0].AmountOutFor(part); out.Cmp(partPayout) > 0 {
+						t.Fatalf("amountIn %s: candidate prices %s, adapter pays %s", part, out, partPayout)
 					}
 				}
 			}
@@ -182,20 +187,58 @@ func TestNormalizeOracleInventoryPricesSignedDiscountFromAdapterQuote(t *testing
 		AmountIn:  amountIn, GrossAmountOut: gross, MaxAmountOut: gross, MinDiscount: new(big.Int),
 	}
 
-	got := NormalizeOracleInventory(amountIn, []liquidlane.Inventory{source}, []liquidlane.FillQuote{physical})
+	got := NormalizeOracleInventory(amountIn, []liquidlane.Inventory{source}, []liquidlane.FillQuote{physical}, nil)
 	payout := liquidlane.AmountOutAfterDiscount(gross, source.Discount) // 1128146465, as executed on the fork
-	if len(got) != 1 || got[0].ExactPricing() {
+	if len(got) != 1 || !got[0].ExactPricing() {
 		t.Fatalf("normalized = %+v", got)
 	}
-	out := got[0].AmountOutFor(amountIn)
-	if out.Cmp(payout) > 0 || new(big.Int).Sub(payout, out).Cmp(big.NewInt(1)) > 0 {
-		t.Fatalf("candidate prices %s, want the adapter payout %s within one unit", out, payout)
+	if out := got[0].AmountOutFor(amountIn); out.Cmp(payout) != 0 {
+		t.Fatalf("candidate prices %s, want the adapter payout %s", out, payout)
 	}
 
 	physical.MinDiscount = big.NewInt(300)
 	if rejected := NormalizeOracleInventory(
-		amountIn, []liquidlane.Inventory{source}, []liquidlane.FillQuote{physical},
+		amountIn, []liquidlane.Inventory{source}, []liquidlane.FillQuote{physical}, nil,
 	); len(rejected) != 0 {
 		t.Fatalf("discount below the adapter minimum survived: %+v", rejected)
+	}
+}
+
+// Every dropped source declines with the check that failed and the values it compared.
+func TestNormalizeOracleInventoryDeclinesDroppedSources(t *testing.T) {
+	t.Parallel()
+	route := liquidlane.NewRoute(1, common.HexToAddress("0xa"), common.HexToAddress("0x10"),
+		common.HexToAddress("0x1"), common.HexToAddress("0x2"), 18, 6)
+	amountIn := big.NewInt(1_000_000)
+	signed := func(discount int64) liquidlane.Inventory {
+		item := liquidlane.DiscountInventory(route, big.NewInt(2_000_000), nil, common.HexToHash("0xd"), time.Time{})
+		item.Discount = big.NewInt(discount)
+		return item
+	}
+	quote := func(capacity, minDiscount int64) liquidlane.FillQuote {
+		return liquidlane.FillQuote{
+			Inventory: liquidlane.DirectInventory(route, big.NewInt(capacity), nil), AmountIn: amountIn,
+			GrossAmountOut: big.NewInt(900_000), MaxAmountOut: big.NewInt(900_000), MinDiscount: big.NewInt(minDiscount),
+		}
+	}
+	for name, tc := range map[string]struct {
+		sources []liquidlane.Inventory
+		quotes  []liquidlane.FillQuote
+		want    string
+	}{
+		"no quote":          {[]liquidlane.Inventory{signed(200)}, nil, "reason=no adapter quote with output for amount in"},
+		"no capacity":       {[]liquidlane.Inventory{liquidlane.DirectInventory(route, new(big.Int), nil)}, []liquidlane.FillQuote{quote(2_000_000, 0)}, "reason=inventory capacity is not positive"},
+		"adapter capacity":  {[]liquidlane.Inventory{signed(200)}, []liquidlane.FillQuote{quote(0, 0)}, "reason=adapter capacity is not positive"},
+		"below min":         {[]liquidlane.Inventory{signed(200)}, []liquidlane.FillQuote{quote(2_000_000, 300)}, "reason=signed discount is below adapter minimum discount route=" + string(route.ID) + " discount=200 adapterMinDiscount=300"},
+		"duplicate sources": {[]liquidlane.Inventory{signed(200), signed(200)}, []liquidlane.FillQuote{quote(2_000_000, 0)}, "reason=duplicate candidate"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			trace, last := strategies.DecisionTrace(nil).RecordDeclines()
+			NormalizeOracleInventory(amountIn, tc.sources, tc.quotes, trace)
+			if got := last(); !strings.Contains(got, tc.want) {
+				t.Fatalf("decline = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

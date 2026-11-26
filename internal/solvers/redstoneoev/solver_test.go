@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -288,8 +289,9 @@ func TestBuildBidStaleStateGate(t *testing.T) {
 
 	t.Run("both caches stale", func(t *testing.T) {
 		s, _ := seededSolver(t)
-		if d := s.buildBid(t.Context(), decodeAuction(t), pastMax); d.skip != skipExecutorStateStale {
-			t.Fatalf("skip = %q, want %q", d.skip, skipExecutorStateStale)
+		d := s.buildBid(t.Context(), decodeAuction(t), pastMax)
+		if d.skip != skipExecutorStateStale || !strings.Contains(detailOf(d.skipDetail), "exceeds intervals.executorStateMaxAgeMs "+defaultExecutorStateMaxAge.String()) {
+			t.Fatalf("skip = %q detail %q, want %q naming the max age", d.skip, detailOf(d.skipDetail), skipExecutorStateStale)
 		}
 	})
 	t.Run("strategy state stale, executor fresh", func(t *testing.T) {
@@ -746,8 +748,8 @@ func TestFullAuctionLifecycle(t *testing.T) {
 		t.Fatal("breaker should be tripped after 3 recorded failures within the window")
 	}
 	// buildBid (evaluated at the same wall clock as the hot path) must short-circuit to skip "breaker".
-	if d := s.buildBid(t.Context(), decodeAuction(t), time.Now); d.skip != "breaker" {
-		t.Fatalf("tripped breaker must skip the bid, got skip %q", d.skip)
+	if d := s.buildBid(t.Context(), decodeAuction(t), time.Now); d.skip != "breaker" || detailOf(d.skipDetail) != "failed-liquidation rate-limit" {
+		t.Fatalf("tripped breaker must skip the bid naming the rate limit, got skip %q detail %q", d.skip, detailOf(d.skipDetail))
 	}
 
 	// 3) A fresh auction (new id so dedup can't mask it) is dropped by the breaker — nothing enqueued.
@@ -1171,21 +1173,22 @@ func TestBuildBidSkips(t *testing.T) {
 		mut           func(*Solver)
 		priceOverride *big.Int // if set, re-prices the auction oracle so the position is healthy
 		want          string
+		detail        string // substring the skip detail must carry
 	}{
-		{name: "breaker", mut: func(s *Solver) { s.breaker.blacklist() }, want: "breaker"},
+		{name: "breaker", mut: func(s *Solver) { s.breaker.blacklist() }, want: "breaker", detail: "api key blacklisted"},
 		{name: "signer_locked", mut: func(s *Solver) {
 			s.state.store(stateWith(s, mustBig("100000000000000000"), true))
-		}, want: "signer_locked"},
+		}, want: "signer_locked", detail: "locked (withdrawal requested)"},
 		{name: "deposit_low", mut: func(s *Solver) {
 			s.state.store(stateWith(s, big.NewInt(1), false)) // below MIN_DEPOSIT (1e13)
-		}, want: "deposit_low"},
+		}, want: "deposit_low", detail: "executor deposit 1 wei is below minimum 10000000000000 wei"},
 		{name: "bid_cap", mut: func(s *Solver) {
 			s.cfg.MaxBidWei = big.NewInt(1)
-		}, want: "bid_cap"},
+		}, want: "bid_cap", detail: "exceeds maxBidWei 1"},
 		{name: "callback_balance", mut: func(s *Solver) {
 			seedDefaultDecisionStateWithCallbackBalance(t, s, big.NewInt(1), clock())
-		}, want: "callback_balance"},
-		{name: "no_legs_when_healthy", priceOverride: healthy, want: "no_legs"},
+		}, want: "callback_balance", detail: "callback balance 1 wei is below bid"},
+		{name: "no_legs_when_healthy", priceOverride: healthy, want: "no_legs", detail: "position healthy at auction price"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1197,9 +1200,40 @@ func TestBuildBidSkips(t *testing.T) {
 			if tc.priceOverride != nil {
 				frame.Payload.Prices = map[string]string{"0xfED5bC312C7139743bc3ab21Ef92f5AeB353339D": tc.priceOverride.String()}
 			}
-			if d := s.buildBid(t.Context(), frame, clock); d.skip != tc.want {
-				t.Fatalf("skip = %q, want %q", d.skip, tc.want)
+			if d := s.buildBid(t.Context(), frame, clock); d.skip != tc.want || !strings.Contains(detailOf(d.skipDetail), tc.detail) {
+				t.Fatalf("skip = %q detail %q, want %q with detail containing %q", d.skip, detailOf(d.skipDetail), tc.want, tc.detail)
 			}
 		})
 	}
+}
+
+func TestStrategySkipKeepsBoundedCodeAndDetail(t *testing.T) {
+	tests := []struct {
+		name       string
+		out        types.BidOutput
+		code       string
+		detail     string
+		declineMsg string
+	}{
+		{"standard code with detail", types.BidOutput{Reason: types.SkipReasonNoLegs, Detail: types.Text("adapter 0x1 is paused")},
+			types.SkipReasonNoLegs, "adapter 0x1 is paused", "no_legs: adapter 0x1 is paused"},
+		{"standard code alone", types.BidOutput{Reason: types.SkipReasonInFlight}, types.SkipReasonInFlight, "", "in_flight"},
+		{"free-form webhook reason", types.BidOutput{Reason: "spread too wide"},
+			types.SkipReasonStrategy, "spread too wide", "strategy_skip: spread too wide"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d := strategySkip(tc.out)
+			if d.skip != tc.code || detailOf(d.skipDetail) != tc.detail || d.declineReason() != tc.declineMsg {
+				t.Fatalf("decision = %q/%q/%q, want %q/%q/%q", d.skip, detailOf(d.skipDetail), d.declineReason(), tc.code, tc.detail, tc.declineMsg)
+			}
+		})
+	}
+}
+
+func detailOf(d fmt.Stringer) string {
+	if d == nil {
+		return ""
+	}
+	return d.String()
 }

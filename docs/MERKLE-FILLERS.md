@@ -35,7 +35,7 @@ solver's registration and config and the `adapterSettlement` implementation.
 ## Settlement
 
 RFQ: the Reactor delivers the awarded input to the connector through `discountSwapInputs`
-and the recipe pays the awarded output, so the connector must be registered as version `2`
+and the recipe pays the connector's calculated output, so the connector must be registered as version `2`
 in the Reactor's Liquid Lane adapter factory.
 
 UniswapX and LI.FI: the settlement contract holds the order input inside its callback and
@@ -48,8 +48,8 @@ runs two calls for each connector the fill draws on:
 The recipe's signed connector swap sends the payment back to the settlement contract, which
 then settles the order outputs. No adapter-factory registration is involved.
 
-These orders carry no awarded amount, so the solver takes each connector's own payment for
-the input it receives: `getAmountOut(tokenIn, amountIn) * (1e8 - discount) / 1e8`, read at the
+All three solvers use each connector's own payment for the input it receives.
+They compute `getAmountOut(tokenIn, amountIn) * (1e8 - discount) / 1e8`, read at the
 pinned recipe block and rounded like the contract. Together the payments must cover the order
 output; the surplus stays with the settlement contract. The complete settlement transaction is
 simulated from the signer at that block before it is submitted.

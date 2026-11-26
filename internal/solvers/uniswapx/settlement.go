@@ -16,9 +16,8 @@ type settlement interface {
 	initialize(ctx context.Context) error
 	// onMerkleLane reports whether fills are signed by the SDK transaction manager.
 	onMerkleLane() bool
-	// laneAvailable reports whether the transaction lane can take a fill now; quotes are
-	// blocked without it.
-	laneAvailable() bool
+	// laneBlockReason names what prevents quoting or filling, or returns empty when work is allowed.
+	laneBlockReason() string
 	// reservations is the capacity already committed to fills, which quotes must not reuse.
 	reservations(state *quoteState) liquidlane.CapacityReservations
 	// refreshQuoteState publishes the inventory quotes are priced from, observed at chain time now.
@@ -44,7 +43,12 @@ func (adapterSettlement) initialize(context.Context) error { return nil }
 func (adapterSettlement) onMerkleLane() bool               { return false }
 func (adapterSettlement) fillSettled()                     {}
 
-func (a adapterSettlement) laneAvailable() bool { return a.s.txm == nil || a.s.txm.Available() }
+func (a adapterSettlement) laneBlockReason() string {
+	if a.s.txm != nil && !a.s.txm.Available() {
+		return "transaction nonce lane is paused"
+	}
+	return ""
+}
 
 func (a adapterSettlement) reservations(*quoteState) liquidlane.CapacityReservations {
 	return a.s.capacity.Snapshot()

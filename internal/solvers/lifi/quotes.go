@@ -2,6 +2,7 @@ package lifi
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"sort"
 	"strconv"
@@ -139,6 +140,21 @@ func (s *Solver) transactionLaneReady() bool {
 	return s.txLaneState != nil && s.txLaneState.LaneReady()
 }
 
+// laneNotReadyReason names which half of LaneReady failed when the lane exposes it.
+func (s *Solver) laneNotReadyReason() string {
+	type laneDetail interface {
+		Available() bool
+		Idle() bool
+	}
+	if s.txLaneState == nil {
+		return "no transaction lane is configured"
+	}
+	if lane, ok := s.txLaneState.(laneDetail); ok {
+		return fmt.Sprintf("transaction lane is not ready: available %t, idle %t", lane.Available(), lane.Idle())
+	}
+	return "transaction lane is not ready"
+}
+
 func (s *Solver) subscribeTransactionLaneState() (<-chan struct{}, func()) {
 	if s.txLaneState == nil {
 		return nil, func() {}
@@ -234,11 +250,13 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	defer func() { timer.Finish(ctx, outcome) }()
 
 	if !s.transactionLaneReady() {
-		s.observeQuoteBuildRejections(ctx, nil, nil, "lane_unavailable")
+		s.observeQuoteBuildRejections(ctx, nil, types.QuoteOutput{}, "lane_unavailable")
 		outcome = observability.ExternalOperationSkipped
-		observability.Decline(ctx, "quotes_skipped", "transaction lane is unavailable")
+		reason := s.laneNotReadyReason()
+		observability.Decline(ctx, "quotes_skipped", reason)
 		observability.Log(ctx).V(1).Info(
 			"quote refresh skipped: transaction lane unavailable",
+			"reason", reason,
 			"activePairs", len(state.active),
 			"pendingFills", s.capacity.Len(),
 		)
@@ -248,13 +266,13 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	}
 	chainTime, err := s.now(ctx)
 	if err != nil {
-		s.observeQuoteBuildRejections(ctx, nil, nil, "chain_time_error")
+		s.observeQuoteBuildRejections(ctx, nil, types.QuoteOutput{}, "chain_time_error")
 		observability.ErrorUnlessCanceled(ctx, err, "quote refresh: read latest block time")
 		return
 	}
 	source, err := s.fillPath().quoteSource(ctx, routes, chainTime)
 	if err != nil {
-		s.observeQuoteBuildRejections(ctx, nil, nil, "snapshot_error")
+		s.observeQuoteBuildRejections(ctx, nil, types.QuoteOutput{}, "snapshot_error")
 		observability.ErrorUnlessCanceled(ctx, err, "quote refresh: read routes")
 		return
 	}
@@ -262,7 +280,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	if s.cfg.Gas != nil {
 		maxFeePerGas, err = s.readMaxFeePerGas(ctx)
 		if err != nil {
-			s.observeQuoteBuildRejections(ctx, nil, nil, "gas_price_error")
+			s.observeQuoteBuildRejections(ctx, nil, types.QuoteOutput{}, "gas_price_error")
 			observability.ErrorUnlessCanceled(ctx, err, "quote refresh: read max fee per gas")
 			return
 		}
@@ -290,7 +308,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		QuoteExpiresAt:    serverTime.Add(s.cfg.QuoteTTL),
 	})
 	if err != nil {
-		s.observeQuoteBuildRejections(ctx, inventory, nil, "strategy_error")
+		s.observeQuoteBuildRejections(ctx, inventory, types.QuoteOutput{}, "strategy_error")
 		observability.ErrorUnlessCanceled(ctx, err, "quote refresh: strategy")
 		return
 	}
@@ -299,7 +317,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	if source.discountErr != nil {
 		unavailableDiscounts = discountBases
 	}
-	s.observeQuoteBuildRejections(ctx, inventory, out.Quotes, "", unavailableDiscounts...)
+	s.observeQuoteBuildRejections(ctx, inventory, out, "", unavailableDiscounts...)
 	earliestExpiry, latestExpiry := quoteExpiryBounds(out.Quotes)
 	if len(out.Quotes) == 0 {
 		observability.Log(ctx).V(1).Info(
@@ -322,11 +340,13 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		)
 	}
 	if !s.transactionLaneReady() {
-		s.observeQuoteBuildRejections(ctx, inventory, nil, "lane_unavailable")
+		s.observeQuoteBuildRejections(ctx, inventory, types.QuoteOutput{}, "lane_unavailable")
 		outcome = observability.ExternalOperationSkipped
-		observability.Decline(ctx, "quotes_skipped", "transaction lane is unavailable")
+		reason := s.laneNotReadyReason()
+		observability.Decline(ctx, "quotes_skipped", reason)
 		observability.Log(ctx).V(1).Info(
 			"quote plan discarded: transaction lane unavailable",
+			"reason", reason,
 			"quotePairs", len(out.Quotes),
 			"quoteRanges", quoteRangeCount(out.Quotes),
 		)

@@ -149,20 +149,32 @@ func (l *SpendLedger) Include(id string, spend Spend) error {
 	return nil
 }
 
-// Expire compacts completed fills whose signed deadline passed, keeping an inclusion watermark.
-func (l *SpendLedger) Expire(chainTime int64) {
+// Expired is a spend Expire retired: a queued award's hold, or a completed fill compacted into
+// its capacities' inclusion watermark.
+type Expired struct {
+	ID       string
+	Deadline int64
+	Queued   bool
+}
+
+// Expire releases queued awards and compacts completed fills whose signed deadline passed,
+// keeping an inclusion watermark. It returns what it retired, so callers can say why.
+func (l *SpendLedger) Expire(chainTime int64) []Expired {
 	if l == nil {
-		return
+		return nil
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	var expired []Expired
 	for id, spend := range l.queued {
 		if spend.Deadline <= chainTime {
 			delete(l.queued, id)
+			expired = append(expired, Expired{ID: id, Deadline: spend.Deadline, Queued: true})
 		}
 	}
 	for id, deadline := range l.completed {
 		if deadline <= chainTime {
+			expired = append(expired, Expired{ID: id, Deadline: deadline})
 			if spend, found := l.spends[id]; found && spend.IncludedAt != 0 {
 				for capacityID := range spend.Amounts {
 					l.watermarks[capacityID] = max(l.watermarks[capacityID], spend.IncludedAt)
@@ -172,6 +184,7 @@ func (l *SpendLedger) Expire(chainTime int64) {
 			delete(l.completed, id)
 		}
 	}
+	return expired
 }
 
 // Reservations subtracts pending spends and canonical spends absent from each
