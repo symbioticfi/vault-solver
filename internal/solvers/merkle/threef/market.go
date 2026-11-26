@@ -6,14 +6,29 @@ import (
 	"math/big"
 
 	ethereum "github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
+	accountbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+
+	vschain "github.com/symbioticfi/vault-solver/internal/chain"
 )
+
+// reverts names reverts from the Merkle account and executor; the vendored policy and capability
+// ABIs declare no custom errors.
+var reverts = vschain.RevertDecoderFor(&accountbinding.MerkleAccountMetaData, &recipeexecutor.RecipeExecutorMetaData)
+
+// readFailure names a failed read. A revert is decoded; any other error is dropped because RPC
+// transport errors can carry the endpoint URL and its key.
+func readFailure(what string, err error) error {
+	if data, reverted := vschain.RevertData(err); reverted {
+		return errors.Errorf("3f %s reverted: %s", what, reverts.Describe(data))
+	}
+	return errors.Errorf("3f %s failed", what)
+}
 
 // observation contains quantities read at the recipe's canonical block.
 type observation struct {
@@ -40,35 +55,35 @@ func observe(ctx context.Context, chain provider.Reader, snapshot provider.Snaps
 }
 
 func observePolicy(ctx context.Context, chain provider.Reader, snapshot provider.Snapshot, market mintMarket) (observation, error) {
-	call := func(to common.Address, data []byte) ([]byte, error) {
+	call := func(what string, to common.Address, data []byte) ([]byte, error) {
 		raw, err := chain.CallContract(ctx, ethereum.CallMsg{To: &to, Data: data}, snapshot.BlockNumber)
 		if err != nil {
-			return nil, err
+			return nil, readFailure(what+" read", err)
 		}
 		if len(raw) != 32 {
-			return nil, errors.New("3f invalid scalar reply")
+			return nil, errors.Errorf("3f %s read returned %d bytes, want a 32-byte scalar", what, len(raw))
 		}
 		return raw, nil
 	}
-	raw, err := call(market.Policy, policyABI.PackRemainingAssets(market.Asset, market.UnderlyingAsset))
+	raw, err := call("policy budget", market.Policy, policyABI.PackRemainingAssets(market.Asset, market.UnderlyingAsset))
 	if err != nil {
-		return observation{}, errors.New("3f policy budget read failed")
+		return observation{}, err
 	}
 	budget, err := policyABI.UnpackRemainingAssets(raw)
 	if err != nil {
 		return observation{}, err
 	}
-	raw, err = call(market.Policy, policyABI.PackMinYieldPerRequest(market.UnderlyingAsset))
+	raw, err = call("minimum yield", market.Policy, policyABI.PackMinYieldPerRequest(market.UnderlyingAsset))
 	if err != nil {
-		return observation{}, errors.New("3f minimum yield read failed")
+		return observation{}, err
 	}
 	minimum, err := policyABI.UnpackMinYieldPerRequest(raw)
 	if err != nil {
 		return observation{}, err
 	}
-	raw, err = call(market.Asset, tokenABI.PackBalanceOf(snapshot.Account))
+	raw, err = call("funding balance", market.Asset, tokenABI.PackBalanceOf(snapshot.Account))
 	if err != nil {
-		return observation{}, errors.New("3f funding balance read failed")
+		return observation{}, err
 	}
 	cash, err := tokenABI.UnpackBalanceOf(raw)
 	if err != nil {
@@ -102,37 +117,28 @@ func eligible(ctx context.Context, chain provider.Reader, snapshot provider.Snap
 	}
 	raw, err := chain.CallContract(ctx, ethereum.CallMsg{From: snapshot.Account, To: &snapshot.Account, Data: data}, snapshot.BlockNumber)
 	if err != nil {
+		// Only a revert carrying data is the policy's verdict; anything else fails the pass.
 		var reverted rpc.DataError
 		if errors.As(err, &reverted) && reverted.ErrorData() != nil {
-			return errors.Errorf("%w: policy consume for request %s reverted: %s", errIneligible, request.Hex(), revertDetail(reverted.ErrorData()))
+			detail := fmt.Sprintf("undecodable revert data %v", reverted.ErrorData())
+			if payload, _ := vschain.RevertData(err); payload != nil {
+				detail = reverts.Describe(payload)
+			}
+			return errors.Errorf("%w: policy consume for request %s reverted: %s", errIneligible, request.Hex(), detail)
 		}
-		return errors.New("3f eligibility read failed")
+		return readFailure("eligibility read for request "+request.Hex(), err)
 	}
 	values, err := capability.UnpackExecute(raw)
-	if err != nil || len(values) != 5 || values[3].Cmp(principal) != 0 || values[4].Sign() != 0 {
-		return errors.New("3f invalid eligibility simulation")
+	switch {
+	case err != nil:
+		return errors.Errorf("3f eligibility simulation for request %s: decode: %w", request.Hex(), err)
+	case len(values) != 5:
+		return errors.Errorf("3f eligibility simulation for request %s returned %d results, want 5", request.Hex(), len(values))
+	case values[3].Cmp(principal) != 0 || values[4].Sign() != 0:
+		return errors.Errorf("3f eligibility simulation for request %s: budget delta %s, want %s; equality check %s, want 0",
+			request.Hex(), values[3], principal, values[4])
 	}
 	return nil
-}
-
-// revertDetail decodes a revert payload's Error(string) or Panic reason, else returns its selector and
-// arguments raw: the policy and capability ABIs declare no custom errors to decode against.
-func revertDetail(data any) string {
-	text, ok := data.(string)
-	if !ok {
-		return fmt.Sprintf("%v", data)
-	}
-	raw, err := hexutil.Decode(text)
-	if err != nil {
-		return "undecodable revert data " + text
-	}
-	if reason, err := abi.UnpackRevert(raw); err == nil {
-		return reason
-	}
-	if len(raw) < 4 {
-		return "revert data " + text
-	}
-	return fmt.Sprintf("selector %s args %s", hexutil.Encode(raw[:4]), hexutil.Encode(raw[4:]))
 }
 
 func encodedValue(source uint8, value uint64) *big.Int {

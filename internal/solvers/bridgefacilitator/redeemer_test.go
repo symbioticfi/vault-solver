@@ -7,6 +7,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
@@ -60,7 +61,7 @@ func TestRedeemAllScansOncePerAdapterBeforeItsSend(t *testing.T) {
 		metricstest.RequireFamilyValue(t, reg, "solver_bot_workflow_observed_items", map[string]string{
 			"solver": Name, "view": threeFStateRedeemable,
 		}, 0)
-		if req.To != wantAdapter || req.Label != "redeem" || len(req.Data) == 0 {
+		if req.To != wantAdapter || req.Label != "redeem" || req.RevertDecoder != reverts || len(req.Data) == 0 {
 			t.Fatalf("unexpected redeem request: to=%s label=%q dataLen=%d", req.To.Hex(), req.Label, len(req.Data))
 		}
 		return txmanager.Result{Outcome: txmanager.OutcomeConfirmed,
@@ -194,7 +195,7 @@ func TestReadyToRedeemNamesScanGaps(t *testing.T) {
 		abiEncodeAggregate3CallResults(t, []chain.CallResult{
 			{Success: true, ReturnData: abiEncodeAddress(t, request0)},
 			{Success: true, ReturnData: abiEncodeAddress(t, request1)},
-			{Success: false},
+			{Success: false, ReturnData: bfAdapter.GetABI().Errors["NotRequest"].ID.Bytes()[:4]},
 			{Success: true, ReturnData: abiEncodeAddress(t, request2)},
 		}),
 		abiEncodeAggregate3CallResults(t, []chain.CallResult{
@@ -209,7 +210,7 @@ func TestReadyToRedeemNamesScanGaps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"requests(2) call failed", "canWithdraw on " + request0.Hex() + " malformed: ", "canWithdraw on " + request1.Hex() + " call failed"}
+	want := []string{"requests(2) call failed: NotRequest()", "canWithdraw on " + request0.Hex() + " malformed: ", "canWithdraw on " + request1.Hex() + " call failed: no revert data"}
 	if len(ready) != 1 || ready[0] != request2 || len(gaps) != len(want) {
 		t.Fatalf("ready = %v, gaps = %q, want [%s] and prefixes %q", ready, gaps, request2.Hex(), want)
 	}
@@ -218,7 +219,33 @@ func TestReadyToRedeemNamesScanGaps(t *testing.T) {
 			t.Fatalf("gaps = %q, want prefixes %q", gaps, want)
 		}
 	}
-	if got := gapSummary(append(gaps, "extra")); !strings.HasPrefix(got, "4 gaps: requests(2) call failed; ") || !strings.HasSuffix(got, "; ...") {
+	if got := gapSummary(append(gaps, "extra")); !strings.HasPrefix(got, "4 gaps: requests(2) call failed: NotRequest(); ") || !strings.HasSuffix(got, "; ...") {
 		t.Fatalf("gapSummary = %q, want the count, first three and an ellipsis", got)
+	}
+}
+
+func TestRedeemNamesEstimateRevert(t *testing.T) {
+	rec := tracetest.Install(t)
+	request := common.HexToAddress("0xb0")
+	c, stop := newMulticallFakeClient(t,
+		abiEncodeAggregate3Results(t, abiEncodeUint256(t, 1)),
+		abiEncodeAggregate3Results(t, abiEncodeAddress(t, request)),
+		abiEncodeAggregate3Results(t, abiEncodeBool(t, true)),
+	)
+	defer stop()
+	metrics, _ := newThreeFTestMetrics(t)
+	s := &Solver{
+		cfg: &Config{RedeemBatchSize: 10}, reader: newReader(c, common.Address{}),
+		log: logr.Discard(), metrics: metrics, targets: []Target{{Adapter: common.HexToAddress("0xa0")}},
+		targetsAuthoritative: true,
+	}
+	s.txManager = transactionSenderFunc(func(context.Context, txmanager.Request) txmanager.Result {
+		revert := &txmanager.ExecutionRevertError{Data: bfAdapter.GetABI().Errors["NotRequest"].ID.Bytes()[:4], Cause: errors.New("execution reverted")}
+		return txmanager.Result{Outcome: txmanager.OutcomeSubmissionError, Err: errors.Errorf("estimate gas %q: %w", "redeem", revert)}
+	})
+	s.redeemAll(t.Context())
+	submit := tracetest.Ended(t, rec, "3f.redeem.submit")
+	if got := submit.Status().Description; !strings.Contains(got, "(revert NotRequest())") {
+		t.Fatalf("redeem submit status = %q, want the decoded estimate revert", got)
 	}
 }

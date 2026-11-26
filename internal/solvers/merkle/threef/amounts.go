@@ -16,11 +16,11 @@ var ratePattern = regexp.MustCompile(`^(0|[1-9][0-9]*)(\.[0-9]+)?$`)
 
 func uintAmount(text string) (*big.Int, error) {
 	if len(text) > 78 || !uintPattern.MatchString(text) {
-		return nil, errors.New("expected canonical uint256 decimal")
+		return nil, errors.Errorf("%.80q is not a canonical uint256 decimal", text)
 	}
 	value, ok := new(big.Int).SetString(text, 10)
 	if !ok || value.BitLen() > 256 {
-		return nil, errors.New("quantity exceeds uint256")
+		return nil, errors.Errorf("%s exceeds uint256", text)
 	}
 	return value, nil
 }
@@ -34,7 +34,7 @@ func dtoID(value float32) (uint64, error) {
 
 func address(text string) (common.Address, error) {
 	if !common.IsHexAddress(text) || common.HexToAddress(text) == (common.Address{}) {
-		return common.Address{}, errors.New("3F address must be nonzero Ethereum address")
+		return common.Address{}, errors.Errorf("3F address %.66q is not a nonzero Ethereum address", text)
 	}
 	return common.HexToAddress(text), nil
 }
@@ -42,9 +42,13 @@ func address(text string) (common.Address, error) {
 func depositAsset(auction threef.AuctionDto) (common.Address, error) {
 	asset, ok := auction.GetDepositAssetOk()
 	if !ok || asset == nil {
-		return common.Address{}, errors.New("3F auction deposit asset is unavailable")
+		return common.Address{}, errors.Errorf("3F auction %v has no depositAsset", auction.Id)
 	}
-	return address(asset.Address)
+	a, err := address(asset.Address)
+	if err != nil {
+		return common.Address{}, errors.Errorf("3F auction %v depositAsset: %w", auction.Id, err)
+	}
+	return a, nil
 }
 
 func minInt(values ...*big.Int) *big.Int {
@@ -96,15 +100,15 @@ func auctionReturnBounds(principal *big.Int, auction threef.AuctionDto) (minimum
 	// Never reconstruct an economic limit from the generated float32 value.
 	exact, present := auction.AdditionalProperties[exactMaxRateKey]
 	if !present {
-		return nil, nil, errors.New("3F auction maxRate lacks exact decimal source")
+		return nil, nil, errors.Errorf("3F auction %v maxRate lacks its exact decimal source", auction.Id)
 	}
 	text, ok := exact.(string)
 	if !ok || len(text) > 128 || !ratePattern.MatchString(text) {
-		return nil, nil, errors.New("3F auction maxRate is not an exact nonnegative decimal")
+		return nil, nil, errors.Errorf("3F auction %v maxRate %.40v is not an exact nonnegative decimal", auction.Id, exact)
 	}
 	rate, ok := new(big.Rat).SetString(text)
 	if !ok {
-		return nil, nil, errors.New("3F auction maxRate is invalid")
+		return nil, nil, errors.Errorf("3F auction %v maxRate %s does not parse as a rational", auction.Id, text)
 	}
 	return threefrates.ReturnBounds(principal, rate, basis.Int64())
 }
@@ -116,13 +120,16 @@ func rateBasis(auction threef.AuctionDto) (*big.Int, error) {
 		var ok bool
 		value, ok = new(big.Rat).SetString(exact.(string))
 		if !ok {
-			return nil, errors.New("3F invalid auction rateBasisSeconds")
+			return nil, errors.Errorf("3F auction %v rateBasisSeconds %.40v is not a number", auction.Id, exact)
 		}
 	} else {
 		value = new(big.Rat).SetFloat64(float64(auction.GetRateBasisSeconds()))
 	}
-	if value == nil || !value.IsInt() || value.Sign() < 0 || !value.Num().IsInt64() {
-		return nil, errors.New("3F auction rateBasisSeconds must be a nonnegative int64")
+	if value == nil {
+		return nil, errors.Errorf("3F auction %v rateBasisSeconds %v is not finite", auction.Id, auction.GetRateBasisSeconds())
+	}
+	if !value.IsInt() || value.Sign() < 0 || !value.Num().IsInt64() {
+		return nil, errors.Errorf("3F auction %v rateBasisSeconds %.40s is not a nonnegative int64", auction.Id, value.RatString())
 	}
 	return value.Num(), nil
 }

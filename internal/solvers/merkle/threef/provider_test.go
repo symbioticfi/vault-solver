@@ -16,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
+	accountbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	wire "github.com/symbioticfi/vault-solver/api/threef"
@@ -257,12 +258,13 @@ func TestEligibleKeepsPolicyRevertReason(t *testing.T) {
 		data any
 		want string
 	}{
-		{"Error(string)", hexutil.Encode(append([]byte{0x08, 0xc3, 0x79, 0xa0}, reason...)), "pair not allowed"},
-		{"Panic(uint256)", "0x4e487b71" + strings.Repeat("0", 62) + "11", "arithmetic underflow or overflow"},
-		{"custom error", "0xdeadbeef" + word, "selector 0xdeadbeef args 0x" + word},
-		{"short payload", "0x1234", "revert data 0x1234"},
+		{"Error(string)", hexutil.Encode(append([]byte{0x08, 0xc3, 0x79, 0xa0}, reason...)), `"pair not allowed"`},
+		{"Panic(uint256)", "0x4e487b71" + strings.Repeat("0", 62) + "11", "panic: arithmetic underflow or overflow"},
+		{"account error", hexutil.Encode(accountbinding.NewMerkleAccount().GetABI().Errors["CapabilityNotAdded"].ID.Bytes()[:4]), "CapabilityNotAdded()"},
+		{"unknown error", "0xdeadbeef" + word, "unknown error 0xdeadbeef (36 bytes)"},
+		{"short payload", "0x1234", "malformed revert data 0x1234"},
 		{"not hex", "nope", "undecodable revert data nope"},
-		{"not a string", 7, "7"},
+		{"not a string", 7, "undecodable revert data 7"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			chain := readFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
@@ -373,7 +375,7 @@ func TestEligibilityUsesNativePolicyAndExactBudgetDelta(t *testing.T) {
 		err   error
 		want  string
 	}{
-		{name: "eligible", value: 1}, {name: "wrong pair", value: 0, want: "invalid eligibility"}, {name: "transport", err: errors.New("secret URL"), want: "eligibility read failed"},
+		{name: "eligible", value: 1}, {name: "wrong pair", value: 0, want: "budget delta 0, want 1"}, {name: "transport", err: errors.New("secret URL"), want: "eligibility read for request 0x0000000000000000000000000000000000000777 failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			chain := readFunc(func(_ context.Context, msg ethereum.CallMsg, pin *big.Int) ([]byte, error) {
@@ -386,7 +388,7 @@ func TestEligibilityUsesNativePolicyAndExactBudgetDelta(t *testing.T) {
 				return capabilitySchema.Methods["execute"].Outputs.Pack([]*big.Int{big.NewInt(10), new(big.Int), big.NewInt(9), big.NewInt(tc.value), new(big.Int)})
 			})
 			err := eligible(t.Context(), chain, snapshot, market, common.HexToAddress("0x777"), big.NewInt(2_000_000))
-			if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+			if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "secret")) {
 				t.Fatalf("unexpected eligibility: %v", err)
 			}
 		})
@@ -481,5 +483,32 @@ func TestCuratorOwnsAdditionalCallsAndApprovals(t *testing.T) {
 		if _, err := inspect(snapshot, recipe, tree); err != nil {
 			t.Fatalf("curator action rejected: %v", err)
 		}
+	}
+}
+
+func TestObservePolicyNamesReadRevert(t *testing.T) {
+	stringType, err := abi.NewType("string", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reason, err := abi.Arguments{{Type: stringType}}.Pack("paused")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"revert", revertDataError{hexutil.Encode(append([]byte{0x08, 0xc3, 0x79, 0xa0}, reason...))}, `3f policy budget read reverted: "paused"`},
+		{"transport", errors.New("dial https://rpc.example/secret-key"), "3f policy budget read failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chain := readFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) { return nil, tc.err })
+			_, err := observePolicy(t.Context(), chain, provider.Snapshot{}, mintMarket{})
+			if err == nil || err.Error() != tc.want {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }

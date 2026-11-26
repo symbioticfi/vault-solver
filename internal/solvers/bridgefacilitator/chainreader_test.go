@@ -475,3 +475,60 @@ func TestLiquidityAndExposureReadsRequests(t *testing.T) {
 		t.Fatalf("exposure = %+v, want 2 requests %s, %s", st, req0.Hex(), req1.Hex())
 	}
 }
+
+func TestProbeRejection(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		res  chain.CallResult
+		want string
+	}{
+		{"accepted", chain.CallResult{Success: true, ReturnData: abiEncodeBytes4(t, erc1271MagicValue)}, ""},
+		{"reverted", chain.CallResult{ReturnData: bfAdapter.GetABI().Errors["NotFactory"].ID.Bytes()[:4]}, "isValidSignature reverted: NotFactory()"},
+		{"reverted without data", chain.CallResult{}, "isValidSignature reverted: no revert data"},
+		{"malformed", chain.CallResult{Success: true, ReturnData: []byte{1}}, "isValidSignature malformed: "},
+		{"wrong magic", chain.CallResult{Success: true, ReturnData: abiEncodeBytes4(t, [4]byte{0xff, 0xff, 0xff, 0xff})}, "isValidSignature returned ffffffff, want magic value 1626ba7e"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := probeRejection(tc.res)
+			if tc.want == "" && got != "" || !strings.HasPrefix(got, tc.want) {
+				t.Fatalf("probeRejection = %q, want prefix %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A required sub-call failure reverts the whole aggregate3; the reader names that revert.
+func TestReaderMulticallNamesBatchRevert(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if req.Method == "eth_chainId" {
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%v,"result":"0x1"}`, marshalID(req.ID))
+			return
+		}
+		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%v,"error":{"code":3,"message":"execution reverted","data":"0x%x"}}`,
+			marshalID(req.ID), bfAdapter.GetABI().Errors["TooManyRequests"].ID.Bytes()[:4])
+	}))
+	defer srv.Close()
+	c, err := chain.Dial(t.Context(), []string{srv.URL}, "", "0x0000000000000000000000000000000000000001", 20*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = newReader(c, common.Address{}).liquidityAndExposure(t.Context(), common.HexToAddress("0xa0"))
+	if err == nil || !strings.Contains(err.Error(), "(revert TooManyRequests())") {
+		t.Fatalf("err = %v, want the decoded batch revert", err)
+	}
+}

@@ -58,7 +58,8 @@ func (s *Solver) Run(ctx context.Context) error {
 func (s *Solver) tickMint(ctx context.Context) (err error) {
 	ctx, end := tracer.Start(ctx, "threef-merkle.mint.tick")
 	defer func() { end(err) }()
-	return s.keeper.Tick(ctx)
+	// The keeper's simulations and reads keep their RPC errors; name any revert once, here.
+	return reverts.Explain(s.keeper.Tick(ctx))
 }
 
 func logMintIteration(ctx context.Context, err error) {
@@ -109,7 +110,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	address := common.HexToAddress(cfg.Executor)
 	identity, err := recipes.DiscoverExecutors(startup, deps.Chain, []common.Address{address})
 	if err != nil {
-		return nil, errors.Errorf("3f executor identity discovery: %w", err)
+		return nil, errors.Errorf("3f executor identity discovery: %w", reverts.Explain(err))
 	}
 	target := identity[address]
 	strategy := keeper.Strategy{Config: keeper.Config{Name: address.Hex(), Executor: address.Hex(), Account: target.Account.Hex(), Interval: pollInterval}}
@@ -119,7 +120,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 	policy := common.HexToAddress(cfg.Policy)
 	if err := verifyPolicyAccount(startup, deps.Chain, policy, target.Account, nil); err != nil {
-		return nil, err
+		return nil, reverts.Explain(err)
 	}
 	runtime := &mintProvider{API: api, Chain: deps.Chain, Policy: policy}
 	strategy.Providers = []keeper.Provider{runtime}

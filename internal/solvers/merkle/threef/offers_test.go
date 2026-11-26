@@ -892,3 +892,30 @@ func TestCancelReasonNamesCondition(t *testing.T) {
 		})
 	}
 }
+
+func TestInventoryNamesFailedCheck(t *testing.T) {
+	m := testMarket()
+	request := common.HexToAddress("0x1000000000000000000000000000000000000001")
+	other := common.HexToAddress("0x7000000000000000000000000000000000000007")
+	auctions := map[uint64]threef.AuctionDto{1: testAuction(m, 1, request)}
+	for _, tc := range []struct {
+		name string
+		edit func(*threef.OfferDto)
+		want string
+	}{
+		{"request mismatch", func(o *threef.OfferDto) { o.RequestId = other.Hex() }, "3F auction 1: requestId " + request.Hex() + " differs from offer 12 requestId " + other.Hex()},
+		{"unlisted auction", func(o *threef.OfferDto) { o.AuctionId = 2 }, "live 3F offer 12 is on auction 2, which is not listed"},
+		{"non-PUSH", func(o *threef.OfferDto) { o.ExecutionMode = "PULL" }, `live offer 12 has execution mode "PULL", want PUSH`},
+		{"pending above amount", func(o *threef.OfferDto) { o.PendingAmount = "47" }, "live 3F offer 12 pendingAmount 47 exceeds amount 46"},
+		{"bad quantity", func(o *threef.OfferDto) { o.Nonce = "x" }, `3F offer 12 nonce: "x" is not a canonical uint256 decimal`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			offer := testOffer(m, 1, "SUBMITTED", "46")
+			tc.edit(&offer)
+			_, _, err := inventory(m.Account, []threef.OfferDto{offer}, auctions)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("inventory err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}

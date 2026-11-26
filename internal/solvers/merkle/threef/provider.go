@@ -53,7 +53,7 @@ func (p *mintProvider) markets(snapshot provider.Snapshot, recipe recipes.Recipe
 	}
 	for _, market := range markets {
 		if market.Policy != p.Policy {
-			return nil, errors.New("3f recipe policy differs from configured policy")
+			return nil, errors.Errorf("3f recipe policy %s differs from configured policy %s", market.Policy.Hex(), p.Policy.Hex())
 		}
 	}
 	return markets, nil
@@ -92,16 +92,19 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 		if !strings.EqualFold(offer.Maker, snapshot.Account.Hex()) || offer.Status != "AWAITING_MINT" {
 			continue
 		}
-		if offer.ExecutionMode != "PUSH" || !common.IsHexAddress(offer.RequestId) || common.HexToAddress(offer.RequestId) == (common.Address{}) {
-			return nil, errors.New("3f invalid pending PUSH request")
+		if offer.ExecutionMode != "PUSH" {
+			return nil, errors.Errorf("3f AWAITING_MINT offer %v has execution mode %.32q, want PUSH", offer.Id, offer.ExecutionMode)
+		}
+		if _, e := address(offer.RequestId); e != nil {
+			return nil, errors.Errorf("3f AWAITING_MINT offer %v requestId: %w", offer.Id, e)
 		}
 		deadline := offer.MintDeadline.Get()
 		if deadline == nil {
-			return nil, errors.New("3f pending mint has no lease deadline")
+			return nil, errors.Errorf("3f AWAITING_MINT offer %v has no mint lease deadline", offer.Id)
 		}
 		parsed, e := time.Parse(time.RFC3339Nano, *deadline)
 		if e != nil {
-			return nil, errors.New("3f invalid mint lease deadline")
+			return nil, errors.Errorf("3f AWAITING_MINT offer %v mint lease deadline %.40q is not RFC 3339", offer.Id, *deadline)
 		}
 		address := common.HexToAddress(offer.RequestId)
 		if old, ok := deadlines[address]; !ok || parsed.Before(old) {
@@ -151,11 +154,11 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 		}
 		raw, e := p.Chain.CallContract(ctx, ethereum.CallMsg{To: &address, Data: requestABI.PackMintAuthorization(snapshot.Account)}, snapshot.BlockNumber)
 		if e != nil {
-			return nil, errors.New("3f read mintAuthorization failed")
+			return nil, readFailure("mintAuthorization read on request "+address.Hex(), e)
 		}
 		auth, e := requestABI.UnpackMintAuthorization(raw)
 		if e != nil {
-			return nil, errors.New("3f invalid mintAuthorization")
+			return nil, errors.Errorf("3f invalid mintAuthorization on request %s: %w", address.Hex(), e)
 		}
 		if auth.PtAmount.Sign() == 0 {
 			skip("mintAuthorization ptAmount is 0")
@@ -269,7 +272,7 @@ func (p *mintProvider) ValidateLease(ctx context.Context, snapshot provider.Snap
 		}
 		deadline, e := time.Parse(time.RFC3339Nano, *offer.MintDeadline.Get())
 		if e != nil {
-			return errors.New("3f invalid mint lease deadline")
+			return errors.Errorf("3f offer %v mint lease deadline %.40q is not RFC 3339", offer.Id, *offer.MintDeadline.Get())
 		}
 		if deadline.Before(earliest) {
 			earliest = deadline
@@ -307,14 +310,15 @@ func (record *mint) Advance(_ context.Context, snapshot provider.Snapshot) (prov
 		}
 		decoded, e := policyABI.UnpackConsumeEvent(&log)
 		if e != nil {
-			return provider.Progress{}, errors.New("3f invalid policy consume receipt")
+			return provider.Progress{}, errors.Errorf("3f policy Consume log %d in tx %s: %w", log.Index, snapshot.Execution.TxHash.Hex(), e)
 		}
 		if decoded.Asset == record.Asset && decoded.UnderlyingAsset == record.UnderlyingAsset && decoded.Assets.Cmp(record.Principal) == 0 {
 			count++
 		}
 	}
 	if count != 1 {
-		return provider.Progress{}, errors.New("3f confirmed mint lacks one exact policy debit")
+		return provider.Progress{}, errors.Errorf("3f confirmed mint tx %s has %d policy Consume debits of %s %s/%s for request %s, want exactly 1",
+			snapshot.Execution.TxHash.Hex(), count, record.Principal, record.Asset.Hex(), record.UnderlyingAsset.Hex(), record.Request.Hex())
 	}
 	return provider.Progress{Done: true, Outcome: "minted", Reference: snapshot.Execution.TxHash.Hex()}, nil
 }
@@ -322,7 +326,7 @@ func (record *mint) Advance(_ context.Context, snapshot provider.Snapshot) (prov
 func mintFromOutput(output provider.Output) (*mint, error) {
 	record, ok := output.Task.(*mint)
 	if !ok || record == nil {
-		return nil, errors.New("3f mint task is required")
+		return nil, errors.Errorf("3f provider output task is a %T, want a mint", output.Task)
 	}
 	if err := record.validate(); err != nil {
 		return nil, err
@@ -331,11 +335,26 @@ func mintFromOutput(output provider.Output) (*mint, error) {
 }
 
 func (record *mint) validate() error {
-	if record == nil || record.Request == (common.Address{}) || record.Policy == (common.Address{}) || record.Asset == (common.Address{}) || record.UnderlyingAsset == (common.Address{}) || record.Deadline.IsZero() {
-		return errors.New("3f incomplete mint task")
+	var missing string
+	switch {
+	case record == nil:
+		return errors.New("3f mint task is nil")
+	case record.Request == (common.Address{}):
+		missing = "request"
+	case record.Policy == (common.Address{}):
+		missing = "policy"
+	case record.Asset == (common.Address{}):
+		missing = "asset"
+	case record.UnderlyingAsset == (common.Address{}):
+		missing = "underlying asset"
+	case record.Deadline.IsZero():
+		missing = "deadline"
+	}
+	if missing != "" {
+		return errors.Errorf("3f mint task %s is zero", missing)
 	}
 	if record.Principal == nil || record.Principal.Sign() <= 0 || record.Principal.BitLen() > 256 {
-		return errors.New("3f invalid mint principal")
+		return errors.Errorf("3f mint task principal %v for request %s is not a positive uint256", record.Principal, record.Request.Hex())
 	}
 	return nil
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/adapterfactory"
 	"github.com/symbioticfi/vault-solver/api/bindings/erc4626"
 	"github.com/symbioticfi/vault-solver/api/bindings/lens"
+	"github.com/symbioticfi/vault-solver/api/bindings/vaultv2"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 )
@@ -32,6 +33,9 @@ var (
 	vc        = vaultcontroller.NewIVaultController()
 	erc4626b  = erc4626.NewIERC4626()
 	lensB     = lens.NewFrontendLiquidityLens()
+
+	reverts = chain.RevertDecoderFor(&adapter.ThreeFAdapterMetaData, &adapterfactory.IAdapterFactoryMetaData,
+		&lens.FrontendLiquidityLensMetaData, &vaultv2.IVaultV2MetaData)
 )
 
 // maxRequests mirrors MAX_REQUESTS in IThreeFAdapter — the adapter rejects a new request once it tracks
@@ -88,15 +92,24 @@ func newReader(c *chain.Client, lens common.Address) *reader {
 	return &reader{chain: c, lens: lens}
 }
 
+// multicall names the revert when the whole batch reverts, as it does when a required sub-call fails.
+func (r *reader) multicall(ctx context.Context, calls []chain.Call) ([]chain.CallResult, error) {
+	res, err := r.chain.Multicall(ctx, calls)
+	return res, reverts.Explain(err)
+}
+
 // factoryAdapters returns a bounded factory entity snapshot in registry order. The registry is
 // append-only, so totalEntities followed by a batched entity(i) read is a consistent enumeration.
 func (r *reader) factoryAdapters(ctx context.Context, factory common.Address) ([]common.Address, error) {
-	res, err := r.chain.Multicall(ctx, []chain.Call{{Target: factory, Data: factoryB.PackTotalEntities()}})
+	res, err := r.multicall(ctx, []chain.Call{{Target: factory, Data: factoryB.PackTotalEntities()}})
 	if err != nil {
 		return nil, err
 	}
-	if len(res) != 1 || !res[0].Success {
-		return nil, errors.New("adapter factory totalEntities() reverted")
+	if len(res) != 1 {
+		return nil, errors.Errorf("adapter factory totalEntities() returned %d results, want 1", len(res))
+	}
+	if !res[0].Success {
+		return nil, errors.Errorf("adapter factory totalEntities() reverted: %s", reverts.Describe(res[0].ReturnData))
 	}
 	total, err := factoryB.UnpackTotalEntities(res[0].ReturnData)
 	if err != nil {
@@ -114,7 +127,7 @@ func (r *reader) factoryAdapters(ctx context.Context, factory common.Address) ([
 	for i := range calls {
 		calls[i] = chain.Call{Target: factory, Data: factoryB.PackEntity(big.NewInt(int64(i)))}
 	}
-	res, err = r.chain.Multicall(ctx, calls)
+	res, err = r.multicall(ctx, calls)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +138,7 @@ func (r *reader) factoryAdapters(ctx context.Context, factory common.Address) ([
 	adapters := make([]common.Address, count)
 	for i := range res {
 		if !res[i].Success {
-			return nil, errors.Errorf("adapter factory entity(%d) reverted", i)
+			return nil, errors.Errorf("adapter factory entity(%d) reverted: %s", i, reverts.Describe(res[i].ReturnData))
 		}
 		adapterAddr, unpackErr := factoryB.UnpackEntity(res[i].ReturnData)
 		if unpackErr != nil {
@@ -142,26 +155,32 @@ func (r *reader) factoryAdapters(ctx context.Context, factory common.Address) ([
 // resolvedAdapter is one adapter's refresh resolution: its vault, that vault's collateral (the
 // ERC-4626 asset, used to match auctions), its offer-signer (diagnostic only), and whether this solver
 // is an authorized offer signer for it (adapter.isValidSignature accepted the probe). err is set (other
-// fields zero) if a required read reverted, so the caller can drop just that adapter.
+// fields zero) if a required read reverted, so the caller can drop just that adapter. unauthorized
+// says why the probe was rejected.
 type resolvedAdapter struct {
-	vault      common.Address
-	collateral common.Address
-	signer     common.Address
-	authorized bool
-	err        error
+	vault        common.Address
+	collateral   common.Address
+	signer       common.Address
+	authorized   bool
+	unauthorized string
+	err          error
 }
 
-// authorizedByProbe reports whether the adapter's ERC-1271 isValidSignature accepted the probe
-// signature. A revert or any non-magic return means not authorized (drop the adapter), not a hard error.
-func authorizedByProbe(res chain.CallResult) bool {
+// probeRejection says why the adapter's ERC-1271 isValidSignature rejected the probe signature, or
+// returns "" when it accepted it. A revert or any non-magic return means not authorized (drop the
+// adapter), not a hard error.
+func probeRejection(res chain.CallResult) string {
 	if !res.Success {
-		return false
+		return "isValidSignature reverted: " + reverts.Describe(res.ReturnData)
 	}
 	magic, err := bfAdapter.UnpackIsValidSignature(res.ReturnData)
 	if err != nil {
-		return false
+		return fmt.Sprintf("isValidSignature malformed: %v", err)
 	}
-	return magic == erc1271MagicValue
+	if magic != erc1271MagicValue {
+		return fmt.Sprintf("isValidSignature returned %x, want magic value %x", magic, erc1271MagicValue)
+	}
+	return ""
 }
 
 // errAdapterUnconfigured marks an adapter whose on-chain wiring is incomplete (a zero offerSigner,
@@ -173,7 +192,7 @@ var errAdapterUnconfigured = errors.New("adapter not configured")
 // `what` if it reverted, failed to decode, or returned zero.
 func decodeAddr(res chain.CallResult, unpack func([]byte) (common.Address, error), what string) (common.Address, error) {
 	if !res.Success {
-		return common.Address{}, errors.Errorf("%s reverted", what)
+		return common.Address{}, errors.Errorf("%s reverted: %s", what, reverts.Describe(res.ReturnData))
 	}
 	addr, err := unpack(res.ReturnData)
 	if err != nil {
@@ -202,7 +221,7 @@ func (r *reader) resolveAdapters(ctx context.Context, adapters []common.Address,
 			chain.Call{Target: a, Data: bfAdapter.PackIsValidSignature(probe.hash, probe.sig), AllowFailure: true},
 		)
 	}
-	res, err := r.chain.Multicall(ctx, calls)
+	res, err := r.multicall(ctx, calls)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +245,8 @@ func (r *reader) resolveAdapters(ctx context.Context, adapters []common.Address,
 			continue
 		}
 		out[i].vault, out[i].signer = vault, offerSigner
-		out[i].authorized = authorizedByProbe(res[base+2])
+		out[i].unauthorized = probeRejection(res[base+2])
+		out[i].authorized = out[i].unauthorized == ""
 		if !out[i].authorized {
 			continue // not an authorized offer signer; the caller drops it (no collateral read needed)
 		}
@@ -237,7 +257,7 @@ func (r *reader) resolveAdapters(ctx context.Context, adapters []common.Address,
 		return out, nil
 	}
 
-	ares, err := r.chain.Multicall(ctx, assetCalls)
+	ares, err := r.multicall(ctx, assetCalls)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +305,7 @@ func (r *reader) liquidityAndExposure(ctx context.Context, adapterAddr common.Ad
 		{Target: adapterAddr, Data: bfAdapter.PackMaxAssetsPerRequest()},
 		{Target: adapterAddr, Data: bfAdapter.PackRequestsLength()},
 	}
-	res, err := r.chain.Multicall(ctx, calls)
+	res, err := r.multicall(ctx, calls)
 	if err != nil {
 		return exposureState{}, err
 	}
@@ -294,7 +314,7 @@ func (r *reader) liquidityAndExposure(ctx context.Context, adapterAddr common.Ad
 	}
 	for i, rr := range res {
 		if !rr.Success {
-			return exposureState{}, errors.Errorf("liquidity multicall: sub-call %d reverted", i)
+			return exposureState{}, errors.Errorf("liquidity multicall: sub-call %d reverted: %s", i, reverts.Describe(rr.ReturnData))
 		}
 	}
 
@@ -323,7 +343,7 @@ func (r *reader) liquidityAndExposure(ctx context.Context, adapterAddr common.Ad
 	// partial read only leaves some funded offers live, so completeness is not required here.
 	var requests []common.Address
 	if n > 0 {
-		rres, rerr := r.chain.Multicall(ctx, requestSlotCalls(adapterAddr, n))
+		rres, rerr := r.multicall(ctx, requestSlotCalls(adapterAddr, n))
 		if rerr != nil {
 			return exposureState{}, rerr
 		}
@@ -376,7 +396,7 @@ func collectRequests(res []chain.CallResult, expected int) ([]common.Address, []
 	out := make([]common.Address, 0, len(res))
 	for i, rr := range res {
 		if !rr.Success {
-			gaps = append(gaps, fmt.Sprintf("requests(%d) call failed", i))
+			gaps = append(gaps, fmt.Sprintf("requests(%d) call failed: %s", i, reverts.Describe(rr.ReturnData)))
 			continue
 		}
 		addr, err := bfAdapter.UnpackRequests(rr.ReturnData)
@@ -397,12 +417,15 @@ func collectRequests(res []chain.CallResult, expected int) ([]common.Address, []
 // single multicall. The gaps name every requested slot or canWithdraw result that was missing or
 // undecodable; valid results are returned even when there are gaps.
 func (r *reader) readyToRedeem(ctx context.Context, adapterAddr common.Address) ([]common.Address, []string, error) {
-	lres, err := r.chain.Multicall(ctx, []chain.Call{{Target: adapterAddr, Data: bfAdapter.PackRequestsLength()}})
+	lres, err := r.multicall(ctx, []chain.Call{{Target: adapterAddr, Data: bfAdapter.PackRequestsLength()}})
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(lres) != 1 || !lres[0].Success {
-		return nil, nil, errors.New("adapter.requestsLength() reverted")
+	if len(lres) != 1 {
+		return nil, nil, errors.Errorf("adapter.requestsLength() returned %d results, want 1", len(lres))
+	}
+	if !lres[0].Success {
+		return nil, nil, errors.Errorf("adapter.requestsLength() reverted: %s", reverts.Describe(lres[0].ReturnData))
 	}
 	n, err := bfAdapter.UnpackRequestsLength(lres[0].ReturnData)
 	if err != nil {
@@ -417,7 +440,7 @@ func (r *reader) readyToRedeem(ctx context.Context, adapterAddr common.Address) 
 		return nil, gaps, nil
 	}
 
-	res, err := r.chain.Multicall(ctx, requestSlotCalls(adapterAddr, count))
+	res, err := r.multicall(ctx, requestSlotCalls(adapterAddr, count))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -432,7 +455,7 @@ func (r *reader) readyToRedeem(ctx context.Context, adapterAddr common.Address) 
 		// AllowFailure: a single malformed Request must not break the whole batch.
 		calls[i] = chain.Call{Target: req, AllowFailure: true, Data: vc.PackCanWithdraw()}
 	}
-	res, err = r.chain.Multicall(ctx, calls)
+	res, err = r.multicall(ctx, calls)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -444,7 +467,7 @@ func (r *reader) readyToRedeem(ctx context.Context, adapterAddr common.Address) 
 	resultCount := min(len(res), len(reqs))
 	for i, rr := range res[:resultCount] {
 		if !rr.Success {
-			gaps = append(gaps, fmt.Sprintf("canWithdraw on %s call failed", reqs[i].Hex()))
+			gaps = append(gaps, fmt.Sprintf("canWithdraw on %s call failed: %s", reqs[i].Hex(), reverts.Describe(rr.ReturnData)))
 			continue
 		}
 		ok, derr := vc.UnpackCanWithdraw(rr.ReturnData)

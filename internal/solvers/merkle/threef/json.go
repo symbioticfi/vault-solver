@@ -16,17 +16,17 @@ func checkJSON(body []byte) error {
 	d := json.NewDecoder(bytes.NewReader(body))
 	d.UseNumber()
 	if _, err := checkValue(d, 0); err != nil {
-		return errors.New("3f invalid or ambiguous JSON response")
+		return errors.Errorf("3f invalid or ambiguous JSON response at byte %d: %w", d.InputOffset(), err)
 	}
 	if _, err := d.Token(); err != io.EOF {
-		return errors.New("3f trailing JSON response data")
+		return errors.Errorf("3f trailing JSON response data at byte %d", d.InputOffset())
 	}
 	return nil
 }
 
 func checkValue(d *json.Decoder, depth int) (any, error) {
 	if depth > 64 {
-		return nil, errors.New("JSON nesting exceeds bound")
+		return nil, errors.New("JSON nesting exceeds 64 levels")
 	}
 	token, err := d.Token()
 	if err != nil {
@@ -46,14 +46,19 @@ func checkValue(d *json.Decoder, depth int) (any, error) {
 		return nil, err
 	}
 	if delim != '{' {
-		return nil, errors.New("invalid JSON container")
+		return nil, errors.Errorf("unexpected JSON delimiter %q", delim)
 	}
 	seen := make(map[string]bool)
 	for d.More() {
 		keyToken, keyErr := d.Token()
 		key, ok := keyToken.(string)
-		if keyErr != nil || !ok || seen[key] {
-			return nil, errors.New("duplicate or invalid JSON property")
+		switch {
+		case keyErr != nil:
+			return nil, errors.Errorf("JSON property name: %w", keyErr)
+		case !ok:
+			return nil, errors.Errorf("JSON property name is a %T, not a string", keyToken)
+		case seen[key]:
+			return nil, errors.Errorf("duplicate JSON property %.64q", key)
 		}
 		seen[key] = true
 		value, valueErr := checkValue(d, depth+1)
@@ -62,8 +67,11 @@ func checkValue(d *json.Decoder, depth int) (any, error) {
 		}
 		if key == "id" || key == "auctionId" || key == "offerId" {
 			number, isNumber := value.(json.Number)
-			if !isNumber || !exactIDNumber(number) {
-				return nil, errors.New("invalid exact JSON identifier")
+			if !isNumber {
+				return nil, errors.Errorf("JSON %s is a %T, not a number", key, value)
+			}
+			if !exactIDNumber(number) {
+				return nil, errors.Errorf("JSON %s %.64s is not an exact positive integer below 16777216", key, number)
 			}
 		}
 	}

@@ -34,7 +34,11 @@ func (p *mintPlanning) PrepareExecution(ctx context.Context, strategies []keeper
 	}
 	for _, member := range plan.Members {
 		if len(member.Plan.Outputs) != 1 || len(member.Plan.Outputs[0]) != 1 {
-			return keeper.ExecutionPlan{}, errors.New("3f plan requires one provider")
+			providers := 0
+			if len(member.Plan.Outputs) > 0 {
+				providers = len(member.Plan.Outputs[0])
+			}
+			return keeper.ExecutionPlan{}, errors.Errorf("3f plan has %d output groups and %d providers in the first, want exactly 1 of each", len(member.Plan.Outputs), providers)
 		}
 		if err := p.runtime.ValidateLease(ctx, member.Plan.Snapshot, member.Plan.Outputs[0][0]); err != nil {
 			return keeper.ExecutionPlan{}, err
@@ -55,7 +59,11 @@ type offerWorkflow struct {
 
 func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	ctx, end := tracer.Start(ctx, "threef-merkle.offers.tick", observability.AttrAdapter.String(w.strategy.Config.Account))
-	defer func() { end(err) }()
+	defer func() {
+		// Wrapped read and SDK errors keep their RPC errors; name any revert once, here.
+		err = reverts.Explain(err)
+		end(err)
+	}()
 	p := w.planner
 	prepared, err := recipes.DiscoverBatch(ctx, p.Chain, []common.Address{common.HexToAddress(w.strategy.Config.Executor)}, []common.Address{common.HexToAddress(w.strategy.Config.Account)}, p.Caller, recipes.PreparationOptions{ChainID: p.ChainID, Cache: p.RecipeCache})
 	if err != nil {
@@ -70,8 +78,8 @@ func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	if len(auctions) > 4096 {
-		return errors.New("3f auction inventory exceeds 4096-row bound")
+	if len(auctions) > maxRows {
+		return errors.Errorf("3f auction inventory of %d rows exceeds the %d-row bound", len(auctions), maxRows)
 	}
 	// Consider unanswered auctions in stable oldest-first order.
 	sort.SliceStable(auctions, func(i, j int) bool { return auctions[i].Id < auctions[j].Id })
@@ -106,8 +114,8 @@ func (w *offerWorkflow) validateOfferAuthorization(ctx context.Context, original
 		return err
 	}
 	a, b := original.Snapshot, fresh[0].Snapshot
-	if a.Executor != b.Executor || a.Account != b.Account || a.Caller != b.Caller || a.RecipeHash != b.RecipeHash || a.RecipeBlock != b.RecipeBlock || a.Root != b.Root || a.BlockNumber > b.BlockNumber {
-		return errors.New("3f offer authorization changed; prepare again")
+	if changed := authorizationChange(a, b); changed != "" {
+		return errors.Errorf("3f offer authorization changed (%s); prepare again", changed)
 	}
 	binding := accountbinding.NewMerkleAccount()
 	requests := make([]protocolio.ReadRequest, len(leaves))
@@ -121,14 +129,14 @@ func (w *offerWorkflow) validateOfferAuthorization(ctx context.Context, original
 	for i := range leaves {
 		result := roles.At(i)
 		if result.Err != nil {
-			return errors.Errorf("3f read offer leaf role: %w", result.Err)
+			return errors.Errorf("3f read offer leaf role %s: %w", leaves[i].Hex(), result.Err)
 		}
 		allowed, err := binding.UnpackHasRole(result.Data)
 		if err != nil {
 			return errors.Errorf("3f decode offer leaf role: %w", err)
 		}
 		if !allowed {
-			return errors.New("3f executor lacks offer leaf role")
+			return errors.Errorf("3f executor %s lacks offer leaf role %s on account %s", b.Executor.Hex(), leaves[i].Hex(), b.Account.Hex())
 		}
 	}
 	sender := p.Sender
@@ -143,11 +151,32 @@ func (w *offerWorkflow) validateOfferAuthorization(ctx context.Context, original
 	return nil
 }
 
+// authorizationChange names how the fresh snapshot b differs from the prepared one a, "" when it does not.
+func authorizationChange(a, b recipes.Snapshot) string {
+	switch {
+	case a.Executor != b.Executor:
+		return fmt.Sprintf("executor %s became %s", a.Executor.Hex(), b.Executor.Hex())
+	case a.Account != b.Account:
+		return fmt.Sprintf("account %s became %s", a.Account.Hex(), b.Account.Hex())
+	case a.Caller != b.Caller:
+		return fmt.Sprintf("caller %s became %s", a.Caller.Hex(), b.Caller.Hex())
+	case a.RecipeHash != b.RecipeHash:
+		return fmt.Sprintf("recipe hash %s became %s", a.RecipeHash.Hex(), b.RecipeHash.Hex())
+	case a.RecipeBlock != b.RecipeBlock:
+		return fmt.Sprintf("recipe block %d became %d", a.RecipeBlock, b.RecipeBlock)
+	case a.Root != b.Root:
+		return fmt.Sprintf("root %s became %s", a.Root.Hex(), b.Root.Hex())
+	case a.BlockNumber > b.BlockNumber:
+		return fmt.Sprintf("block %d is older than prepared block %d", b.BlockNumber, a.BlockNumber)
+	}
+	return ""
+}
+
 // evaluate is owned by Run. Every membership result, including rejection,
 // belongs to this exact pin and is discarded after the pass.
 func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin provider.Snapshot, markets []mintMarket, auctions []threef.AuctionDto, offers []threef.OfferDto, validate func(context.Context) error) error {
-	if len(offers) > 4096 || len(auctions) > 4096 {
-		return errors.New("3F offer inventory exceeds 4096-row bound")
+	if len(offers) > maxRows || len(auctions) > maxRows {
+		return errors.Errorf("3F offer inventory of %d auctions and %d offers exceeds the %d-row bound", len(auctions), len(offers), maxRows)
 	}
 	byID, err := indexAuctions(auctions)
 	if err != nil {
