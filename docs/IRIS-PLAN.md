@@ -51,7 +51,9 @@ from the quote fields inside a curator-approved recipe.
   discover. If they equal the words the index was built from, discovery is skipped; a
   paused executor's words change when it resumes. Any `setRecipe` (even with the same body) moves `recipeBlock`, a new
   tree moves `root`, so no recipe or tree change can be skipped. AccessManager grants and
-  account roles are not in these values; quote-time admission checks them on every quote.
+  account roles are not in these values. Each refresh rechecks the route for executors
+  skipped because the signer could not call them. A restored route triggers discovery.
+  Quote-time admission checks access again on every quote.
 - Execution calldata is `recipes.Assemble(recipe, tree, inputs, nil, nil)` with the nine
   keeper inputs (borrower, receiver, collateral, debt, duration, fixedRate, venueBitmap,
   deadline, nonce), routed with `recipes.RouteExecution` (direct caller or
@@ -240,8 +242,9 @@ would bypass the allowance cap.
 12. Solver declines: a bitmap without any market's venue, and a cleared allowance.
 13. One lane: of two concurrent firm requests one is signed and one gets `solver_busy`.
 14. Recipe and keeper changes: unchanged refreshes skip discovery; `setRecipe` triggers it;
-    a caller change keeps the old index and quotes decline until it is restored; a revoked
-    AccessManager role declines quotes until it is granted again.
+    a caller change removes only the affected market; restoring AccessManager access
+    readmits a skipped market even when the recipe is unchanged. Quote-time checks reject
+    a revoked signer role until it is granted again.
 15. Expiry: a signed quote taken after its deadline reverts.
 16. Settlement: after maturity and repayment, the UI claim recipe returns the bond (and
     refuses an open loan), and the curator's claim leaf returns the solver proceeds.

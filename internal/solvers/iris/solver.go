@@ -80,6 +80,8 @@ type Solver struct {
 	markets atomic.Pointer[marketIndex]
 	// built holds the on-chain words the index was decoded from; only the refresh loop uses it.
 	built []common.Hash
+	// A keeper grant can change without changing the recipe state.
+	unroutable []recipes.Snapshot
 
 	// firm admits one firm quote at a time; reservations hold the bonds of signed quotes.
 	firm         sync.Mutex
@@ -167,7 +169,7 @@ func (s *Solver) refresh(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	if slices.Equal(state, s.built) {
+	if slices.Equal(state, s.built) && !s.routeRestored(ctx) {
 		return nil
 	}
 	prepared := make(map[common.Address]recipes.PreparedRecipe)
@@ -190,9 +192,18 @@ func (s *Solver) refresh(ctx context.Context) (err error) {
 	}
 	trees := make(map[common.Hash]*recipes.Tree)
 	markets := make([]Market, 0, len(prepared))
+	var unroutable []recipes.Snapshot
 	for _, executor := range s.cfg.RecipeExecutors {
 		member, found := prepared[executor]
 		if !found {
+			continue
+		}
+		if err := s.checkRoute(ctx, member.Snapshot); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			unroutable = append(unroutable, member.Snapshot)
+			s.skip(ctx, executor, err)
 			continue
 		}
 		market, err := s.admit(ctx, member, trees)
@@ -213,7 +224,7 @@ func (s *Solver) refresh(ctx context.Context) (err error) {
 	}
 	index := newMarketIndex(markets)
 	s.markets.Store(&index)
-	s.built = state
+	s.built, s.unroutable = state, unroutable
 	observability.Log(ctx).Info("iris markets discovered", "markets", len(markets))
 	return nil
 }
@@ -237,13 +248,33 @@ func (s *Solver) callerGroups(ctx context.Context, state []common.Hash) map[comm
 	return groups
 }
 
-// admit checks the executor routes the signer and decodes its offer recipe; trees caches the
-// permission tree per root.
+func (s *Solver) checkRoute(ctx context.Context, snapshot recipes.Snapshot) error {
+	if _, err := recipes.RouteExecution(ctx, s.chain, snapshot, s.signer, executorBinding.PackExecute(nil, nil, nil, nil)); err != nil {
+		return errors.Errorf("executor does not admit the signer: %w", err)
+	}
+	return nil
+}
+
+func (s *Solver) routeRestored(ctx context.Context) bool {
+	if len(s.unroutable) == 0 {
+		return false
+	}
+	head, err := s.chain.HeaderByNumber(ctx, nil)
+	if err != nil || head == nil || head.Number == nil {
+		return false
+	}
+	for _, snapshot := range s.unroutable {
+		snapshot.BlockNumber = head.Number.Uint64()
+		if s.checkRoute(ctx, snapshot) == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// admit decodes the offer recipe and caches the permission tree per root.
 func (s *Solver) admit(ctx context.Context, member recipes.PreparedRecipe, trees map[common.Hash]*recipes.Tree) (Market, error) {
 	snapshot := member.Snapshot
-	if _, err := recipes.RouteExecution(ctx, s.chain, snapshot, s.signer, executorBinding.PackExecute(nil, nil, nil, nil)); err != nil {
-		return Market{}, errors.Errorf("executor does not admit the signer: %w", err)
-	}
 	tree, found := trees[snapshot.Root]
 	if !found {
 		var err error

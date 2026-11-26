@@ -514,7 +514,8 @@ is returned, and Iris pulls the bond from the account at `take`.
   the signer. A paused executor, or one whose recipe is not an offer program, is logged and
   left out while the other markets keep quoting. Every `refreshInterval` the solver
   re-reads each executor's account, caller, recipe hash and block and the account root in
-  one call, and rediscovers markets only when one changed.
+  one call. It rediscovers markets when one of those values changes or an executor's
+  previously missing keeper access is restored.
 - `POST /quote` tries the markets whose caps admit the request cheapest first. Each is
   priced from the `pricing` table (raised to the market's APR floor), its bond sized as the
   recipe does (BLM requirement plus 25%, rounded up), and the curator's Iris allowance must

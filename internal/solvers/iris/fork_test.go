@@ -289,6 +289,16 @@ func TestForkIrisEndToEnd(t *testing.T) {
 		f.waitDiscoveries(t, discovered+6)
 		f.expectMarkets(t, 2)
 
+		execute := [4]byte(executorBinding.GetABI().Methods["execute"].ID)
+		f.sendABI(forkAdmin, f.manager, "AccessManager", "setTargetFunctionRole", f.aave, [][4]byte{execute}, uint64(85))
+		f.setRecipe(f.aave, f.fixture.Offers[0].Recipe)
+		f.waitDiscoveries(t, discovered+7)
+		f.expectMarkets(t, 1)
+		f.expectDecline(t, f.request("keeper cannot route at discovery"), "above_market_limits")
+		f.sendABI(forkAdmin, f.manager, "AccessManager", "setTargetFunctionRole", f.aave, [][4]byte{execute}, uint64(keeperRole))
+		f.waitDiscoveries(t, discovered+8)
+		f.expectMarkets(t, 2)
+
 		// A keeper role change leaves the recipe state alone: the quote path checks it.
 		time.Sleep(2 * f.refresh)
 		f.sendABI(forkAdmin, f.manager, "AccessManager", "revokeRole", uint64(keeperRole), forkSigner)
