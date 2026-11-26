@@ -59,6 +59,7 @@ type chainReader interface {
 
 // sender is the shared Merkle transaction manager's non-strict surface.
 type sender interface {
+	Available() bool
 	LaneReady() bool
 	SendAsync(ctx context.Context, req transaction.Request) (<-chan transaction.Result, bool)
 }
@@ -372,6 +373,14 @@ func (s *Solver) newServer(ctx context.Context) *http.Server {
 	mux.HandleFunc("POST /quote", s.handle(false))
 	mux.HandleFunc("POST /quote/indicative", s.handle(true))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	// Available, not LaneReady: an in-flight signature is busy, not unready.
+	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, _ *http.Request) {
+		if !s.sender.Available() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	timeout := s.cfg.Timing.ResponseBudget + time.Second
 	return &http.Server{
 		Addr: s.cfg.Server.ListenAddress, Handler: observability.TraceHandler(mux, func(r *http.Request) string { return r.URL.Path }),

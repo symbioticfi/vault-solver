@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/symbioticfi/merkle-executor/sdk/transaction"
 )
 
 func validRequest() quoteRequest {
@@ -103,4 +104,21 @@ func TestHandlerAuthAndDeclines(t *testing.T) {
 	rec = post("secret", body)
 	equal(t, http.StatusNotFound, rec.Code)
 	ok(t, strings.Contains(rec.Body.String(), `"reason":"no_market"`), rec.Body.String())
+}
+
+type availability bool
+
+func (a availability) Available() bool { return bool(a) }
+func (a availability) LaneReady() bool { return bool(a) }
+func (availability) SendAsync(context.Context, transaction.Request) (<-chan transaction.Result, bool) {
+	return nil, false
+}
+
+func TestReadyFollowsTheTransactionManager(t *testing.T) {
+	for available, code := range map[bool]int{true: http.StatusNoContent, false: http.StatusServiceUnavailable} {
+		s := &Solver{sender: availability(available)}
+		rec := httptest.NewRecorder()
+		s.newServer(context.Background()).Handler.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ready", nil))
+		equal(t, code, rec.Code)
+	}
 }

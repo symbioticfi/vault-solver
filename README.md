@@ -519,7 +519,7 @@ is returned, and Iris pulls the bond from the account at `take`.
   misses its window is dropped by the shared transaction manager rather than holding the
   signer.
 - `POST /quote/indicative` returns the same terms unsigned, after the same checks and a
-  simulation of the signing recipe (nothing is sent), all in one RPC batch. Declines are `404` with a
+  simulation of the signing recipe within `txManager.maxGas` (nothing is sent), all in one RPC batch. Declines are `404` with a
   `reasons` entry, such as `no_market`, `above_market_limits`, `rate_above_max_fixed_rate`
   (with the rate), `insufficient_bond_allowance` or `insufficient_bond_balance`.
 - The quote deadline must reach the coordinator about 120 s ahead, so the solver dates it
@@ -532,6 +532,9 @@ is returned, and Iris pulls the bond from the account at `take`.
 - `server.authHeader` and `server.authValueEnv` are required, because every firm request
   costs gas. Put the same header in the IRIS registry entry's `headers`.
 - Metrics: `iris_quote_requests_total{kind,outcome}` and `iris_quote_duration_seconds{kind}`.
+  `GET /ready` on the quote server is `503` while the transaction manager cannot accept the
+  signature (not yet started, its nonce held by a strict send, or its queue full); `GET /healthz`
+  is liveness only.
 
 Design and open items: [`docs/IRIS-PLAN.md`](docs/IRIS-PLAN.md) · example
 [`config/iris.example.yaml`](config/iris.example.yaml).

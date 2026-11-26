@@ -16,12 +16,14 @@ import (
 )
 
 // fakeChain answers the BLM requirement, the debt-token balance and the Iris allowance, and
-// any call from a sender as a sign simulation that fails with simulation. A market whose debt
-// token is short has no cash. It counts round trips: batches and head reads.
+// any call from a sender as a sign simulation that fails with simulation, or runs out of gas
+// below gas (zero gas is the node's cap). A market whose debt token is short has no cash. It
+// counts round trips: batches and head reads.
 type fakeChain struct {
 	requirement, balance, allowance *big.Int
 	short                           common.Address
 	simulation                      error
+	gas                             uint64
 	head                            *types.Header
 	trips                           int
 }
@@ -45,6 +47,8 @@ func (c *fakeChain) CallContract(_ context.Context, msg ethereum.CallMsg, _ *big
 
 func (c *fakeChain) call(msg ethereum.CallMsg) ([]byte, error) {
 	switch {
+	case msg.From != (common.Address{}) && msg.Gas != 0 && msg.Gas < c.gas:
+		return nil, errors.New("out of gas")
 	case msg.From != (common.Address{}):
 		return nil, c.simulation
 	case bytes.HasPrefix(msg.Data, blmBinding.GetABI().Methods["bondRequirement"].ID):
@@ -151,6 +155,9 @@ func TestIndicativeQuoteDeclines(t *testing.T) {
 			r.Duration = big.NewInt(31 * 86400)
 		}, "above_market_limits"},
 		{"recipe cannot fund the bond", fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(1e9), simulation: errors.New("execution reverted")}, nil, "recipe_rejected"},
+		{"sign above the gas budget", fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(1e9), gas: 400_000}, func(s *Solver, _ *request) {
+			s.maxGas = 300_000
+		}, "recipe_rejected"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

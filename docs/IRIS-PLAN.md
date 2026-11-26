@@ -119,7 +119,8 @@ left). A market whose rate exceeds `maxFixedRate` declines with
 (ties keep executor order): one batched read gives every market's bond requirement, Iris
 allowance and cash, and the firm path simulates the passing markets' signing transactions
 five at a time, sending the cheapest that passes. An indicative quote is one RPC batch at
-latest: the same reads plus every market's sign execution simulated from the signer (no
+latest: the same reads plus every market's sign execution simulated from the signer under the
+firm path's gas budget (no
 head read, no SDK re-authentication; the route is the one discovery admitted, and the
 account stands in for a missing borrower or receiver). The simulation runs the recipe's own
 funding, so a bond the account cannot fund declines `recipe_rejected` as IRIS requires. If none passes, the cheapest market's
@@ -218,7 +219,7 @@ would bypass the allowance cap.
    AccessManager keeper; roles are granted per executor; the curator sets a 30k Iris
    allowance; the account's USDC sits in Aave, with no cash.
 2. Startup: the binary discovers both markets, recovers the Morpho payload, skips the
-   claim executor with a logged reason, and serves `/healthz`.
+   claim executor with a logged reason, and reports `/ready`.
 3. Auth: a request without the configured header gets 401.
 4. Indicative quote: a request above the Morpho caps goes to Aave; the bond equals the
    BLM requirement read independently, padded like the recipe; nothing is sent.

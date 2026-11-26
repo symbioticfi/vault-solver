@@ -2,6 +2,7 @@ package iris
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"math/big"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
@@ -273,7 +275,7 @@ func (s *Solver) preflight(ctx context.Context, candidates []candidate, block *b
 			if err != nil {
 				return nil, err
 			}
-			requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadCall, Call: ethereum.CallMsg{From: s.signer, To: &call.Executor, Data: call.Data}, Block: block})
+			requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadCall, Call: ethereum.CallMsg{From: s.signer, To: &call.Executor, Data: call.Data, Gas: cmp.Or(s.maxGas, params.MaxTxGas)}, Block: block})
 		}
 	}
 	group, err := protocolio.ReadGroup(ctx, s.chain, requests...)

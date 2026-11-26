@@ -675,7 +675,7 @@ solvers:
 			t.Fatalf("solver exited:\n%s", f.logs.String())
 		default:
 		}
-		request, err := http.NewRequestWithContext(f.ctx, http.MethodGet, "http://"+f.server+"/healthz", nil)
+		request, err := http.NewRequestWithContext(f.ctx, http.MethodGet, "http://"+f.server+"/ready", nil)
 		must(t, err)
 		if response, err := http.DefaultClient.Do(request); err == nil {
 			_ = response.Body.Close()
@@ -685,7 +685,7 @@ solvers:
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatalf("solver never became healthy:\n%s", f.logs.String())
+	t.Fatalf("solver never became ready:\n%s", f.logs.String())
 }
 
 func (f *forkEVM) request(id string) quoteRequest {
