@@ -4,15 +4,21 @@ import (
 	"bytes"
 	"context"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
+	"github.com/go-logr/logr/funcr"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/merkle-executor/sdk/transaction"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 // fakeChain answers the BLM requirement, the debt-token balance and the Iris allowance, and
@@ -133,31 +139,32 @@ func TestIndicativeQuoteDeclines(t *testing.T) {
 		chain  fakeChain
 		mutate func(*Solver, *request)
 		reason string
+		detail string
 	}{
-		{"allowance short", fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(37e6)}, nil, "insufficient_bond_allowance"},
+		{"allowance short", fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(37e6)}, nil, "insufficient_bond_allowance", "Iris allowance 37000000 is below bond"},
 		{"allowance held by an open quote", fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(60e6)}, func(s *Solver, _ *request) {
 			s.reserve(Quote{DebtToken: fixtureUSDC, Bond: big.NewInt(30e6), Deadline: big.NewInt(time.Now().Add(time.Minute).Unix())})
-		}, "insufficient_bond_allowance"},
+		}, "insufficient_bond_allowance", "plus reserved 30000000"},
 		{"cash held by an open quote", fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(1e9), balance: big.NewInt(60e6)}, func(s *Solver, _ *request) {
 			s.reserve(Quote{DebtToken: fixtureUSDC, Bond: big.NewInt(30e6), Deadline: big.NewInt(time.Now().Add(time.Minute).Unix())})
-		}, "insufficient_bond_balance"},
-		{"zero requirement", fakeChain{requirement: new(big.Int), allowance: big.NewInt(1e9)}, nil, "zero_bond_requirement"},
+		}, "insufficient_bond_balance", "balance 60000000 is below bond"},
+		{"zero requirement", fakeChain{requirement: new(big.Int), allowance: big.NewInt(1e9)}, nil, "zero_bond_requirement", "bondRequirement is 0"},
 		{"bond cap", fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(1e9)}, func(s *Solver, _ *request) {
 			s.cfg.Pricing.MaxBond = big.NewInt(37e6)
-		}, "bond_above_limit"},
+		}, "bond_above_limit", "exceeds pricing.maxBond 37000000"},
 		{"venue not allowed", fakeChain{}, func(_ *Solver, r *request) {
 			r.VenueBitmap = big.NewInt(0b100)
-		}, "no_market"},
+		}, "no_market", "match the collateral, debt token and venues"},
 		{"rate ceiling", fakeChain{}, func(_ *Solver, r *request) {
 			r.MaxFixedRate = big.NewInt(5e16)
-		}, "rate_above_max_fixed_rate"},
+		}, "rate_above_max_fixed_rate", "exceeds maxFixedRate 50000000000000000"},
 		{"above every market's limits", fakeChain{}, func(_ *Solver, r *request) {
 			r.Duration = big.NewInt(31 * 86400)
-		}, "above_market_limits"},
-		{"recipe cannot fund the bond", fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(1e9), simulation: errors.New("execution reverted")}, nil, "recipe_rejected"},
+		}, "above_market_limits", "duration 2678400"},
+		{"recipe cannot fund the bond", fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(1e9), simulation: revertWith(t, "CheckFailed()")}, nil, "recipe_rejected", "(revert CheckFailed())"},
 		{"sign above the gas budget", fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(1e9), gas: 400_000}, func(s *Solver, _ *request) {
 			s.maxGas = 300_000
-		}, "recipe_rejected"},
+		}, "recipe_rejected", "out of gas"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -171,6 +178,7 @@ func TestIndicativeQuoteDeclines(t *testing.T) {
 			var refused *declined
 			ok(t, errors.As(err, &refused), err)
 			equal(t, tt.reason, refused.reason)
+			ok(t, strings.Contains(refused.Error(), tt.detail), refused.Error())
 		})
 	}
 }
@@ -238,4 +246,43 @@ func TestSignedBlock(t *testing.T) {
 	}
 	_, err := signedBlock(transaction.Result{Attempts: []common.Hash{{1}}, Err: transaction.ErrNonceConsumed})
 	ok(t, errors.Is(err, transaction.ErrNonceConsumed), err)
+}
+
+// revertError is a node revert carrying its payload.
+type revertError struct{ data []byte }
+
+func (e revertError) Error() string      { return "execution reverted" }
+func (e revertError) RevertData() []byte { return e.data }
+
+// revertWith is a revert of the named no-argument error, which some recipe contract declares.
+func revertWith(t *testing.T, signature string) error {
+	t.Helper()
+	return revertError{data: crypto.Keccak256([]byte(signature))[:4]}
+}
+
+type replayingChain struct {
+	*fakeChain
+
+	err error
+}
+
+func (c replayingChain) ReplayMinedCall(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
+	return nil, c.err
+}
+
+func TestMinedSignRevertIsReplayed(t *testing.T) {
+	call := recipes.ExecutorCall{Executor: common.HexToAddress("0xe")}
+	s := &Solver{chain: replayingChain{fakeChain: &fakeChain{}, err: revertWith(t, "CheckFailed()")}}
+	equal(t, "replay of block 9 reverted with CheckFailed()", s.minedRevert(t.Context(), call, big.NewInt(9)))
+	s.chain = &fakeChain{}
+	equal(t, "revert reason unavailable: the chain reader cannot replay mined calls", s.minedRevert(t.Context(), call, big.NewInt(9)))
+}
+
+func TestFirmDeclineIsLogged(t *testing.T) {
+	var logs []string
+	ctx := observability.WithLogger(t.Context(), funcr.New(func(_, args string) { logs = append(logs, args) }, funcr.Options{}))
+	_, err := (&Solver{}).serve(ctx, quoteRequest{}, false)
+	fails(t, err)
+	joined := strings.Join(logs, "\n")
+	ok(t, strings.Contains(joined, `"msg"="iris quote declined"`) && strings.Contains(joined, "invalid_request: requestId required"), joined)
 }

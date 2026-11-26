@@ -104,6 +104,9 @@ decimal strings except `chainId`.
 - Indicative (`POST /quote/indicative`): the same pricing without signing; the response
   drops `deadline`, `nonce` and `signature` and adds `indicative: true`.
 - Decline: 404 with optional `reasons[]` (`venue`, snake_case `reason`, optional `rate`).
+  Only the reason code goes to the caller. The solver logs each decline with the failed check
+  and its values (Info for firm, V(1) for indicative), and decodes reverts with the recipe and
+  BLM ABIs; a mined sign revert is replayed at its block to name it.
 - The registry entry's `headers` are the caller authentication: the solver requires a
   configured header whose value comes from an env var. It is mandatory, because every firm
   request spends gas.
