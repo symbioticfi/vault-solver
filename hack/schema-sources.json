@@ -91,6 +91,15 @@
       "mode": "manual",
       "refresh": "ask RedStone for the current zod, then re-vendor verbatim",
       "note": "Received via direct chat 2026-06-12; not published in any RedStone public repo (GitHub code search finds it only here), so there is no endpoint to diff. Its public counterpart is the integration guide entry above. Go structs in internal/solvers/redstoneoev/ are pinned to this file by tests, so drift surfaces as live-frame decode failures."
+    },
+    {
+      "name": "IRIS RFQ API reference (public docs)",
+      "vendored": "openapi/iris-rfq-api-reference.md",
+      "mode": "auto",
+      "fetch": "text",
+      "url": "https://docs.iris.credit/rfq/api-reference.md",
+      "refresh": "make refresh-iris-rfq-api",
+      "note": "IRIS publishes no OpenAPI document; this page is the contract of record for the coordinator webhook the iris solver serves. The request and response types in internal/solvers/iris/api.go are hand-written from it."
     }
   ]
 }
