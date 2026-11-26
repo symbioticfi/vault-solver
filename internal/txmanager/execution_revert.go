@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"strings"
 
-	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
+
+	"github.com/symbioticfi/vault-solver/internal/chain"
 )
 
 // ExecutionRevertError is an execution failure returned by gas estimation or by a write relay's
@@ -45,21 +45,11 @@ func executionRevert(err error) *ExecutionRevertError {
 	if errors.As(err, &revert) {
 		return revert
 	}
-	var rpcErr rpc.Error
-	if (!errors.As(err, &rpcErr) || rpcErr.ErrorCode() != 3) &&
-		!strings.Contains(strings.ToLower(err.Error()), "execution reverted") {
+	// A node may omit or malformedly encode its payload. It still reported a revert;
+	// an undecodable payload is not evidence of a transport outage.
+	data, reverted := chain.RevertData(err)
+	if !reverted {
 		return nil
-	}
-	var data []byte
-	var dataErr rpc.DataError
-	if errors.As(err, &dataErr) {
-		if encoded, ok := dataErr.ErrorData().(string); ok {
-			// A node may omit or malformedly encode its payload. It still reported a revert;
-			// an undecodable payload is not evidence of a transport outage.
-			if decoded, decodeErr := hexutil.Decode(encoded); decodeErr == nil {
-				data = decoded
-			}
-		}
 	}
 	return &ExecutionRevertError{Data: data, Cause: err}
 }
