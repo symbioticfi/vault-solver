@@ -2,6 +2,7 @@ package threef
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"slices"
 	"sort"
@@ -16,6 +17,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/bindings/3f/request"
 	"github.com/symbioticfi/vault-solver/api/threef"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 var requestABI = request.NewIRequest()
@@ -117,7 +119,7 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 		return addresses[i].Cmp(addresses[j]) < 0
 	})
 	if len(addresses) == 0 {
-		return nil, provider.ErrNotReady
+		return nil, mintNotReady(ctx, fmt.Sprintf("no AWAITING_MINT PUSH offer for account %s", snapshot.Account.Hex()))
 	}
 	inputs := map[uint]string{}
 	for _, market := range markets {
@@ -137,9 +139,14 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 		}
 		observations = append(observations, observed)
 	}
+	var skips []string
 	for _, address := range addresses {
 		deadline := deadlines[address]
+		skip := func(format string, args ...any) {
+			skips = append(skips, fmt.Sprintf("request %s: ", address.Hex())+fmt.Sprintf(format, args...))
+		}
 		if !p.time().Add(30*time.Second).Before(deadline) || snapshot.Timestamp >= uint64(deadline.Unix()) {
+			skip("mint deadline %s is within 30s of now %s or block time %d", deadline.Format(time.RFC3339), p.time().Format(time.RFC3339), snapshot.Timestamp)
 			continue
 		}
 		raw, e := p.Chain.CallContract(ctx, ethereum.CallMsg{To: &address, Data: requestABI.PackMintAuthorization(snapshot.Account)}, snapshot.BlockNumber)
@@ -151,15 +158,27 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 			return nil, errors.New("3f invalid mintAuthorization")
 		}
 		if auth.PtAmount.Sign() == 0 {
+			skip("mintAuthorization ptAmount is 0")
 			continue
 		}
 		for _, observed := range observations {
 			market := observed.Market
-			if auth.PtAmount.Cmp(observed.Budget) > 0 || auth.PtAmount.Cmp(observed.MaxPrincipal) > 0 || auth.YtAmount.Cmp(minimumReturn(auth.PtAmount, observed.MinimumYield)) < 0 {
+			pair := market.Asset.Hex() + "/" + market.UnderlyingAsset.Hex()
+			minimum := minimumReturn(auth.PtAmount, observed.MinimumYield)
+			switch {
+			case auth.PtAmount.Cmp(observed.Budget) > 0:
+				skip("market %s: ptAmount %s exceeds policy budget %s", pair, auth.PtAmount, observed.Budget)
+				continue
+			case auth.PtAmount.Cmp(observed.MaxPrincipal) > 0:
+				skip("market %s: ptAmount %s exceeds maxPrincipal %s", pair, auth.PtAmount, observed.MaxPrincipal)
+				continue
+			case auth.YtAmount.Cmp(minimum) < 0:
+				skip("market %s: ytAmount %s is below policy minimum %s", pair, auth.YtAmount, minimum)
 				continue
 			}
 			if e = eligible(ctx, p.Chain, snapshot, market, address, observed.MinimumYield); e != nil {
 				if errors.Is(e, errIneligible) {
+					skip("market %s: %v", pair, e)
 					continue
 				}
 				return nil, e
@@ -180,7 +199,10 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 			return []provider.Output{{Inputs: inputs, Results: results, Task: &record}}, nil
 		}
 	}
-	return nil, provider.ErrNotReady
+	if len(observations) == 0 {
+		skips = append(skips, "no funding market resolved for the pending requests")
+	}
+	return nil, mintNotReady(ctx, strings.Join(skips, "; "))
 }
 
 // A dynamic mint leaf commits the funding token, not a fixed collateral pair.
@@ -227,7 +249,7 @@ func (p *mintProvider) ValidateLease(ctx context.Context, snapshot provider.Snap
 		return err
 	}
 	if !p.time().Add(30 * time.Second).Before(record.Deadline) {
-		return provider.ErrNotReady
+		return mintNotReady(ctx, fmt.Sprintf("mint deadline %s is within 30s", record.Deadline.Format(time.RFC3339)))
 	}
 	if err = p.API.Identity(ctx, snapshot.Account); err != nil {
 		return err
@@ -243,7 +265,7 @@ func (p *mintProvider) ValidateLease(ctx context.Context, snapshot provider.Snap
 			continue
 		}
 		if offer.ExecutionMode != "PUSH" || offer.MintDeadline.Get() == nil {
-			return provider.ErrNotReady
+			return mintNotReady(ctx, fmt.Sprintf("offer %v for request %s has execution mode %q or no mint deadline", offer.Id, record.Request.Hex(), offer.ExecutionMode))
 		}
 		deadline, e := time.Parse(time.RFC3339Nano, *offer.MintDeadline.Get())
 		if e != nil {
@@ -254,10 +276,20 @@ func (p *mintProvider) ValidateLease(ctx context.Context, snapshot provider.Snap
 		}
 		found = true
 	}
-	if !found || !p.time().Add(30*time.Second).Before(earliest) {
-		return provider.ErrNotReady
+	if !found {
+		return mintNotReady(ctx, fmt.Sprintf("no AWAITING_MINT offer for request %s", record.Request.Hex()))
+	}
+	if !p.time().Add(30 * time.Second).Before(earliest) {
+		return mintNotReady(ctx, fmt.Sprintf("earliest mint deadline %s is within 30s", earliest.Format(time.RFC3339)))
 	}
 	return nil
+}
+
+// The keeper consumes ErrNotReady as idle, so record the reason before returning it.
+func mintNotReady(ctx context.Context, reason string) error {
+	observability.Log(ctx).V(1).Info("3f mint iteration waiting", "reason", reason)
+	observability.Decline(ctx, "mint_skipped", reason)
+	return errors.Errorf("%w: %s", provider.ErrNotReady, reason)
 }
 
 func (record *mint) Advance(_ context.Context, snapshot provider.Snapshot) (provider.Progress, error) {

@@ -148,6 +148,30 @@ func TestSolveFillAbsorbsUncoveredInputAsPriceImpact(t *testing.T) {
 	}
 }
 
+func TestSolveFillCapsAbsorbedInputAtRemainingSharedCapacity(t *testing.T) {
+	discountID := common.HexToHash("0x01")
+	direct := testFillQuote("direct", "shared", common.Address{}, common.Address{}, 7, 14, 5, nil)
+	direct.Pricing = &liquidlane.QuoteCandidate{Price: big.NewInt(2_000_000_000_000_000_000), Discount: new(big.Int)}
+	discount := testFillQuote("discount", "shared", common.Address{}, common.Address{}, 7, 7, 1, &discountID)
+	for _, capacity := range []int64{5, 6} {
+		t.Run(big.NewInt(capacity).String(), func(t *testing.T) {
+			solution, err := SolveFill(strategies.FillTask{
+				AmountIn: big.NewInt(7), Quotes: []liquidlane.FillQuote{direct, discount}, MaxRoutes: 2,
+				InputPolicy:    strategies.AbsorbUncoveredInput,
+				CapacityLimits: map[liquidlane.CapacityID]*big.Int{"shared": big.NewInt(capacity)},
+			})
+			if err != nil || solution == nil {
+				t.Fatalf("expected a two-leg fill, got %+v, %v", solution, err)
+			}
+			routes := solution.Finalize(big.NewInt(capacity))
+			if len(routes) != 2 || routes[0].AmountIn.Int64() != 6 || routes[0].ReservedAmountOut.Int64() != capacity-1 ||
+				routes[1].AmountIn.Int64() != 1 || routes[1].ReservedAmountOut.Int64() != 1 {
+				t.Fatalf("routes = %+v, want direct reservation %d and discount reservation 1", routes, capacity-1)
+			}
+		})
+	}
+}
+
 func TestSolveFillGasPricingIsOptional(t *testing.T) {
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")

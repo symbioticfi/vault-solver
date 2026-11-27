@@ -32,7 +32,7 @@ func TestInventoryClipsAdvertisedFundingByConnectorBudget(t *testing.T) {
 	chain.Remaining = big.NewInt(700)
 	late := offer
 	late.DiscountID, late.BlockNumber, late.MaxAssets = common.HexToHash("0x99"), 99, big.NewInt(600)
-	inventory, skipped, err := ReadInventory(t.Context(), chain, 1, []Offer{offer, late})
+	inventory, skipped, err := ReadInventory(t.Context(), chain, 1, []Offer{offer, late}, nil)
 	if err != nil || skipped != nil || len(inventory) != 2 {
 		t.Fatal(inventory, err)
 	}
@@ -50,7 +50,7 @@ func TestInventoryClipsAdvertisedFundingByConnectorBudget(t *testing.T) {
 	if item.Adapter != vlt || item.Vault != chain.ConnectorAccount || item.CapacityID != liquidlane.NewCapacityID(1, chain.ConnectorAccount, tOut) {
 		t.Fatalf("route = %+v", item.Route)
 	}
-	if empty, dropped, err := ReadInventory(t.Context(), chain, 1, nil); empty != nil || dropped != nil || err != nil {
+	if empty, dropped, err := ReadInventory(t.Context(), chain, 1, nil, nil); empty != nil || dropped != nil || err != nil {
 		t.Fatal("empty offers read the chain")
 	}
 }
@@ -78,7 +78,7 @@ func TestInventoryDropsOffersTheConnectorContradicts(t *testing.T) {
 				chainID = 2
 			}
 			// A contradicted offer is dropped and reported; the read itself succeeds.
-			inventory, err, readErr := ReadInventory(t.Context(), chain, chainID, []Offer{offer})
+			inventory, err, readErr := ReadInventory(t.Context(), chain, chainID, []Offer{offer}, nil)
 			if readErr != nil {
 				t.Fatal(readErr)
 			}
@@ -95,7 +95,7 @@ func TestInventoryDropsOffersTheConnectorContradicts(t *testing.T) {
 func TestInventoryRejectsInvalidBlock(t *testing.T) {
 	chain, offer := inventoryFixture(t)
 	chain.Header.Number = new(big.Int).Lsh(big.NewInt(1), 64)
-	if _, _, err := ReadInventory(t.Context(), chain, 1, []Offer{offer}); err == nil {
+	if _, _, err := ReadInventory(t.Context(), chain, 1, []Offer{offer}, nil); err == nil {
 		t.Fatal("invalid block accepted")
 	}
 }

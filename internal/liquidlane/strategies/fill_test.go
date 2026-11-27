@@ -147,12 +147,16 @@ func TestValidateFillRoutesIncludesSettlementGas(t *testing.T) {
 func TestFillRouteReservationsAggregatesAndClonesInput(t *testing.T) {
 	t.Parallel()
 	amount := big.NewInt(4)
-	reservations, ok := FillRouteReservations([]FillRoute{
+	reservations, err := FillRouteReservations([]FillRoute{
 		{CapacityID: "shared", ReservedAmountOut: amount},
 		{CapacityID: "shared", ReservedAmountOut: big.NewInt(6)},
 	})
-	if !ok || reservations["shared"].Cmp(big.NewInt(10)) != 0 {
-		t.Fatalf("reservations = %#v, ok = %t", reservations, ok)
+	if err != nil || reservations["shared"].Cmp(big.NewInt(10)) != 0 {
+		t.Fatalf("reservations = %#v, err = %v", reservations, err)
+	}
+	if _, err := FillRouteReservations([]FillRoute{{RouteID: "r", ReservedAmountOut: amount}}); err == nil ||
+		err.Error() != "fill route 0 (r) has no capacity id" {
+		t.Fatalf("missing capacity err = %v", err)
 	}
 	amount.SetInt64(99)
 	if reservations["shared"].Cmp(big.NewInt(10)) != 0 {

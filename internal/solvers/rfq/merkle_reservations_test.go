@@ -26,6 +26,8 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/api/bindings/multicall3"
 	"github.com/symbioticfi/vault-solver/internal/chain"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	connectorledger "github.com/symbioticfi/vault-solver/internal/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	merklerfq "github.com/symbioticfi/vault-solver/internal/solvers/merkle/rfq"
@@ -56,10 +58,18 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 	if err := manager.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	curator := httptest.NewServer(http.HandlerFunc(routeRPC.serveTree))
+	curator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/orders" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"orders":[]}`))
+			return
+		}
+		routeRPC.serveTree(w, r)
+	}))
 	defer curator.Close()
 	t.Setenv("RFQ_BACKEND_SHARED_SECRET", "test-secret")
-	text := minimalConfig + "recipeExecutors: ['0x0000000000000000000000000000000000000043']\ncurator: {url: " + curator.URL + "}\n"
+	text := strings.Replace(minimalConfig, "https://rfq-backend.example", curator.URL, 1) +
+		"recipeExecutors: ['0x0000000000000000000000000000000000000043']\ncurator: {url: " + curator.URL + "}\n"
 	var node yaml.Node
 	if err := yaml.Unmarshal([]byte(text), &node); err != nil {
 		t.Fatal(err)
@@ -90,10 +100,25 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 	if err := s.merkle.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+	if response := do(t, s.server.handler(), http.MethodPost, "/quote", "test-secret", body); response.Code != http.StatusNoContent {
+		t.Fatalf("quote before first successful award poll = %d, want 204", response.Code)
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
+	execDone := make(chan error, 1)
 	go func() { defer close(done); merkleManager.Start(ctx) }()
-	t.Cleanup(func() { cancel(); <-done })
+	go func() { execDone <- s.runExecution(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+		<-execDone
+	})
+	for deadline := time.Now().Add(time.Second); !s.server.quotes.canQuote(); {
+		if time.Now().After(deadline) {
+			t.Fatal("quotes stayed unavailable after a successful award poll")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	sender := merkleManager.Sender("rfq-merkle")
 	if err := sender.Submit(t.Context(), merkletransaction.ExecutionRequest{To: common.HexToAddress("0x10")}); err != nil {
 		t.Fatal(err)
@@ -123,6 +148,25 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 			t.Fatalf("pending quote HTTP status = %d, want %d: %s", response.Code, status, response.Body.String())
 		}
 	}
+
+	_, quoteAccount, quoteRouteFound := s.merkle.ResolveRoute(common.HexToAddress(body.Adapters[0].Adapter), common.HexToAddress(body.TokenIn), tOut)
+	if !quoteRouteFound {
+		t.Fatal("fixture quote route is missing")
+	}
+	capacity := liquidlane.NewCapacityID(1, quoteAccount, tOut)
+	spend := connectorledger.Spend{Amounts: liquidlane.CapacityReservations{capacity: big.NewInt(1)}, Deadline: time.Now().Add(time.Minute).Unix()}
+	if err := s.merkle.Spends.ReserveQueued("queued", spend); err != nil {
+		t.Fatal(err)
+	}
+	body.Adapters[0].MaxAssets = "456"
+	if response := do(t, s.server.handler(), http.MethodPost, "/quote", "test-secret", body); response.Code != http.StatusNoContent {
+		t.Fatalf("quote used a queued award's reserved capacity: %d", response.Code)
+	}
+	body.Adapters[0].MaxAssets = "457"
+	if response := do(t, s.server.handler(), http.MethodPost, "/quote", "test-secret", body); response.Code != http.StatusOK {
+		t.Fatalf("quote could not use the unreserved remainder: %d", response.Code)
+	}
+	s.merkle.Spends.PruneQueued(nil)
 
 	// Each independent account covers only part of the requested input.
 	routes := s.server.quotes.resolveRoute
@@ -164,7 +208,7 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 		http.Error(w, "unexpected backend lookup", http.StatusServiceUnavailable)
 	}))
 	defer backend.Close()
-	quoteText := strings.Replace(text, "https://rfq-backend.example", backend.URL, 1) + "quoteOnly: true\n"
+	quoteText := strings.Replace(text, curator.URL, backend.URL, 1) + "quoteOnly: true\n"
 	if err := yaml.Unmarshal([]byte(quoteText), &node); err != nil {
 		t.Fatal(err)
 	}

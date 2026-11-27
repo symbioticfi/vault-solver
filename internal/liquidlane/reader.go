@@ -714,6 +714,20 @@ func (r *Reader) ReadFillQuotes(
 	tokenIn common.Address,
 	amountIn *big.Int,
 ) ([]FillQuote, error) {
+	return r.readFillQuotes(ctx, routes, tokenIn, amountIn, false)
+}
+
+// ReadPricedFillQuotes reads the oracle price in the same multicall as the
+// amount-specific payout so a fill can also price smaller legs exactly.
+func (r *Reader) ReadPricedFillQuotes(
+	ctx context.Context, routes []Route, tokenIn common.Address, amountIn *big.Int,
+) ([]FillQuote, error) {
+	return r.readFillQuotes(ctx, routes, tokenIn, amountIn, true)
+}
+
+func (r *Reader) readFillQuotes(
+	ctx context.Context, routes []Route, tokenIn common.Address, amountIn *big.Int, withPrice bool,
+) ([]FillQuote, error) {
 	if tokenIn == (common.Address{}) || amountIn == nil || amountIn.Sign() <= 0 {
 		return nil, nil
 	}
@@ -727,7 +741,11 @@ func (r *Reader) ReadFillQuotes(
 		return nil, nil
 	}
 
-	calls := make([]chain.Call, 0, len(candidates)*fillReadsPerRoute)
+	readsPerRoute := fillReadsPerRoute
+	if withPrice {
+		readsPerRoute++
+	}
+	calls := make([]chain.Call, 0, len(candidates)*readsPerRoute)
 	for _, route := range candidates {
 		calls = append(calls,
 			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackPaused()},
@@ -735,6 +753,15 @@ func (r *Reader) ReadFillQuotes(
 			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackGetAmountOut(route.TokenIn, amountIn)},
 			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackMinDiscount(route.TokenIn)},
 		)
+		if withPrice {
+			probe, ok := OraclePriceProbe(route.TokenInDecimals, route.TokenOutDecimals)
+			if !ok {
+				probe = amountIn // Keep the layout for routes whose amount quote already identifies the price.
+			}
+			calls = append(calls, chain.Call{
+				Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackGetAmountOut(route.TokenIn, probe),
+			})
+		}
 	}
 	res, err := r.chain.Multicall(ctx, calls)
 	if err != nil {
@@ -745,7 +772,7 @@ func (r *Reader) ReadFillQuotes(
 	}
 	out := make([]FillQuote, 0, len(candidates))
 	for i, route := range candidates {
-		base := i * fillReadsPerRoute
+		base := i * readsPerRoute
 		paused, maxAssetsRes, amountOutRes, discountRes := res[base], res[base+1], res[base+2], res[base+3]
 		if !unpaused(paused) {
 			continue
@@ -767,6 +794,12 @@ func (r *Reader) ReadFillQuotes(
 		maxRate := RateForAmountOut(maxAmountOut, amountIn, route.TokenInDecimals, route.TokenOutDecimals)
 		inventory := DirectInventory(route, maxAssets, maxRate)
 		inventory.AdapterMinDiscount = CloneBig(discount)
+		if withPrice {
+			inventory.Price = fillQuotePrice(route, res[base+fillReadsPerRoute], amountIn, grossAmountOut)
+			if inventory.Price == nil {
+				continue
+			}
+		}
 		out = append(out, FillQuote{
 			Inventory:      inventory,
 			AmountIn:       CloneBig(amountIn),
@@ -776,6 +809,22 @@ func (r *Reader) ReadFillQuotes(
 		})
 	}
 	return out, nil
+}
+
+func fillQuotePrice(route Route, result chain.CallResult, amountIn, gross *big.Int) *big.Int {
+	if _, ok := OraclePriceProbe(route.TokenInDecimals, route.TokenOutDecimals); !ok {
+		// One price unit changes the gross by more than one output unit, so the
+		// full amount quote uniquely identifies the integer price.
+		return ImpliedPrice(amountIn, gross, route.TokenInDecimals, route.TokenOutDecimals)
+	}
+	if !result.Success {
+		return nil
+	}
+	price, err := llAdapter.UnpackGetAmountOut(result.ReturnData)
+	if err != nil || AmountOutForRate(amountIn, price, route.TokenInDecimals, route.TokenOutDecimals).Cmp(gross) != 0 {
+		return nil
+	}
+	return price
 }
 
 func (r *Reader) FilterAuthorized(ctx context.Context, inv []Inventory, filler common.Address) ([]Inventory, error) {

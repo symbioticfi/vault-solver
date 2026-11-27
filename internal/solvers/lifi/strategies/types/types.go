@@ -49,6 +49,16 @@ type QuoteInput struct {
 
 type QuoteOutput struct {
 	Quotes []Quote `json:"quotes"`
+	// Declines names why each inventory pair got no quote. In-process only: it is not part of
+	// the webhook wire contract.
+	Declines []QuoteDecline `json:"-"`
+}
+
+// QuoteDecline is the failed check, with its values, that left one token pair unquoted.
+type QuoteDecline struct {
+	FromAsset common.Address
+	ToAsset   common.Address
+	Reason    string
 }
 
 type Quote struct {

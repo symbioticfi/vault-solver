@@ -55,6 +55,7 @@ the same nonce; nonce handling does not coordinate their liquidity or off-chain 
 | `uniswapx-filler` | UniswapX V2 RFQ quoting and LiquidLane filling | [plan](docs/UNISWAPX-PLAN.md) | [yaml](config/uniswapx.example.yaml) |
 | `lifi-merkle` | LI.FI same-chain intents through Merkle recipes | [plan](docs/MERKLE-FILLERS.md) | [yaml](config/lifi-merkle.example.yaml) |
 | `uniswapx-merkle` | UniswapX V2 RFQ quoting and filling through Merkle recipes | [plan](docs/MERKLE-FILLERS.md) | [yaml](config/uniswapx-merkle.example.yaml) |
+| `iris` | IRIS fixed-rate solver quotes signed by a Merkle account | [plan](docs/IRIS-PLAN.md) | [yaml](config/iris.example.yaml) |
 
 The Merkle 3F solver retries uncertain offer submissions with the original nonce and terms.
 New offers use random positive 63-bit nonces to fit 3F's off-chain storage.
@@ -107,7 +108,10 @@ It runs either in `external` mode (the open-source filler; quoting and filling s
 own adapters) or `internal` mode (Symbiotic-internal; adds the private discounts flow). The caller EOA
 must be an authorized caller of the RFQ `Executor` (its `setCallers` allowlist, granted by the owner).
 Native mode uses the deployed Executor callback that executes its swap arrays;
-extra callback calls remain empty. Merkle mode uses the generic-call Executor and
+extra callback calls remain empty. Native fills size and validate each leg at the adapter's
+current rounded payout. A direct leg can take remaining input with its payout capped at
+the available capacity. Strategy quote declines include their reason in the solver logs.
+Merkle mode uses the generic-call Executor and
 encodes its recipe calls explicitly. Keep each deployment on its matching mode;
 upgrading the solver does not require replacing native adapters or Executors.
 External mode also fails startup unless that executor has direct `owner`/`marketMaker`/`isFiller`
@@ -116,8 +120,14 @@ and underlying authorization error.
 
 Configure `rfq-filler` with the existing `adapters` list for native
 pricing and fills, or with `recipeExecutors` for Merkle connector pricing and fills.
-Setting both fails startup. The Merkle mode uses `curator` for permissions and keeps pending execution in RAM;
+Setting both fails startup. The Merkle mode uses `curator` for permissions and keeps pending execution in RAM.
 One award can use multiple connectors, with capacity shared by funding account and asset.
+Each recipe uses the connector's full rounded payout, which must cover the signed
+order output together with the other legs.
+A Merkle filler keeps polling for awards and reserving their payouts during signing and
+confirmation. It quotes against the unreserved balance and submits fills sequentially.
+Quoting starts after the first completed reservation refresh and pauses if it goes stale for
+two minutes. Fill preparation has a separate timeout.
 `quoteOnly: true` still requires `curator.url` to discover permitted routes at
 startup and serves quotes independently of the fill transaction manager. See its
 [configuration](config/rfq-merkle.example.yaml) and [runbook](docs/RFQ-MERKLE.md).
@@ -433,7 +443,9 @@ signed-discount resolution, calldata construction, or preflight before the trans
 result rejected before the worker lifecycle does not count toward the local fill breaker and is reported as
 `solver_bot_txmanager_admission_rejections_total{label="uniswapx-fill"}` rather than a terminal fill
 failure. `GET /ready` exposes that state and
-also returns not-ready when the latest snapshot has no quotable inventory;
+also returns not-ready when the latest snapshot has no quotable inventory. The `503` body stays generic
+because the quote port is published to the order provider; the failed check is logged as `not ready`
+with a `reason` at debug level;
 `GET /health` and its probe-friendly alias `GET /healthz` remain liveness-only.
 
 Every valid exclusive order assigned to the executor is tracked through `decayStartTime`. After that
@@ -486,6 +498,53 @@ orders and secondary-DEX routes are not supported. Design,
 config, onboarding, and deployment prerequisites:
 [`docs/UNISWAPX-PLAN.md`](docs/UNISWAPX-PLAN.md) · example
 [`config/uniswapx.example.yaml`](config/uniswapx.example.yaml).
+
+### IRIS Solver — `iris`
+
+Answers the [IRIS](https://docs.iris.credit) RFQ coordinator for one Merkle account, which is
+the registered IRIS solver. The account signs quotes through ERC-1271, so there is no quote
+signing key: each firm quote is presigned on-chain by the account's offer recipe before it
+is returned, and Iris pulls the bond from the account at `take`.
+
+- Markets are not configured. Each `recipeExecutors` entry is one market's offer executor,
+  created in the curator UI (Automations, IRIS). The solver reads the market (tokens, venue,
+  payload hash, BLM, bond LLTV, overdue terms) and its limits (principal cap, tenor cap, APR
+  floor) from the recipe. Morpho market payloads are read from `morpho`. Every executor must
+  serve `account` through a caller (the vault's AccessManager, or the signer) that admits
+  the signer. A paused executor, or one whose recipe is not an offer program, is logged and
+  left out while the other markets keep quoting. Every `refreshInterval` the solver
+  re-reads each executor's account, caller, recipe hash and block and the account root in
+  one call, and rediscovers markets only when one changed.
+- `POST /quote` tries the markets whose caps admit the request cheapest first. Each is
+  priced from the `pricing` table (raised to the market's APR floor). The bond equals the BLM
+  requirement, and the Iris allowance must cover it and every quote still open. The solver
+  simulates the recipe (which draws any bond shortfall from the curator's funding venues) for
+  the passing markets, sends the cheapest
+  that passes, and returns the quote once the receipt shows the digest is valid. The
+  signature field is 65 zero bytes. One quote is signed at a time; others decline with
+  `solver_busy`, as does a request while the transaction manager is busy. A signature that
+  misses its window is dropped by the shared transaction manager rather than holding the
+  signer.
+- `POST /quote/indicative` returns the same terms unsigned, after the same checks and a
+  simulation of the signing recipe within `txManager.maxGas` (nothing is sent), all in one RPC batch. Declines are `404` with a
+  `reasons` entry, such as `no_market`, `above_market_limits`, `rate_above_max_fixed_rate`
+  (with the rate), `insufficient_bond_allowance` or `insufficient_bond_balance`.
+- The quote deadline must reach the coordinator about 120 s ahead, so the solver dates it
+  from the slot the signature targets (`timing`), sends the signature at once, holds the
+  response if it lands early, and declines a quote mined in a later slot. `submitLead` must
+  cover the route and simulation RPCs as well as propagation; a signature that is not ready
+  before its slot starts is declined unsent (`slot_missed`).
+  This needs `txManager.confirmations` of at most 1 and an IRIS response timeout above
+  `timing.responseBudget` (the IRIS default is 5 s; `overrides.timeout` allows up to 60 s).
+- `server.authHeader` and `server.authValueEnv` are required, because every firm request
+  costs gas. Put the same header in the IRIS registry entry's `headers`.
+- Metrics: `iris_quote_requests_total{kind,outcome}` and `iris_quote_duration_seconds{kind}`.
+  `GET /ready` on the quote server is `503` while the transaction manager cannot accept the
+  signature (not yet started, its nonce held by a strict send, or its queue full); `GET /healthz`
+  is liveness only.
+
+Design and open items: [`docs/IRIS-PLAN.md`](docs/IRIS-PLAN.md) · example
+[`config/iris.example.yaml`](config/iris.example.yaml).
 
 ### Strategies
 
@@ -965,6 +1024,8 @@ not an order-ID label. Optional startup symbol/decimals warm-up is cancellable b
 cannot hold the HTTP/order loops behind a symbol RPC. Newly warmed trusted tokens emit
 `trusted token metadata` with chain/address and verified fields; unknown fields stay absent.
 LI.FI `discount_api_error` distinguishes a failed lookup for physical inventory from no inventory.
+A LI.FI `strategy_declined` rejection log carries `detail`, the check the default strategy failed for that
+pair (for example `quote maximum 5 is below minimum amount 10`); declined fills log the same kind of `reason`.
 
 UniswapX `quote returned` and RFQ `quote response returned` prove a successful local response write,
 not client receipt. Planner decisions, failed writes, assignments and confirmed fills are distinct
@@ -1188,7 +1249,11 @@ See [the RFQ Merkle runbook](docs/RFQ-MERKLE.md) and [configuration](config/rfq-
 
 Local integration checks require Anvil on `PATH`: `make test-txmanager-anvil`,
 `make test-merkle-sdk-anvil`, and `make test-rfq-merkle-anvil`. They separately exercise the unchanged native transaction engine, RAM SDK ownership,
-and canonical RFQ settlement without live services.
+and canonical RFQ settlement without live services. `make test-iris-fork` runs the `iris`
+solver end to end against a mainnet fork (set `ETH_RPC_URL_MAINNET`) on the curator UI's own
+recipes: quotes on Aave and Morpho markets, bond funding from Aave, the borrower's `take` on
+the deployed Iris, and settlement back to the account. `make refresh-iris-fixture` recompiles
+those recipes from a curator-frontend checkout.
 
 Merkle integrations, including the recipe mode of `rfq-filler` and the `uniswapx-merkle` and `lifi-merkle` solvers,
 use the same SDK transaction implementation as merkle-executor.

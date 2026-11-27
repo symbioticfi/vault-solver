@@ -314,6 +314,7 @@ func TestOrderDepositRetriesShareOneProcessSpan(t *testing.T) {
 // the retry attempt is named on its own reserve stage span (spec §9.4).
 func TestOrderCapacityRetrySpansReserveStage(t *testing.T) {
 	rec := tracetest.Install(t)
+	log, capture := tracetest.CaptureLogs(t, 1)
 	fixture := immediateTestSetup(t)
 	plan := &types.FillPlan{Routes: []types.FillRoute{{
 		RouteID:           "route-1",
@@ -357,7 +358,7 @@ func TestOrderCapacityRetrySpansReserveStage(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- solver.runOrderWorker(
-			t.Context(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+			observability.WithLogger(t.Context(), log), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 			orders, nil, nil,
 		)
 	}()
@@ -379,6 +380,17 @@ func TestOrderCapacityRetrySpansReserveStage(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("worker did not finish after both fills completed")
+	}
+
+	found := false
+	for _, line := range capture() {
+		if strings.Contains(line, "order fill deferred by pending capacity") &&
+			strings.Contains(line, "strategy returned no plan and no reason") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("capacity deferral log omitted the initial strategy reason")
 	}
 
 	reserves := tracetest.AllEnded(rec, "lifi.order.reserve")

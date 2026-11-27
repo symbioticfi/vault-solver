@@ -6,16 +6,19 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
+	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
 
 func TestDeduplicateAdapters_PreservesSourceOrder(t *testing.T) {
@@ -381,5 +384,23 @@ func TestRefreshTargetsAndHydrate_DiscoversFactoryEntityAfterEmptyStartup(t *tes
 	}
 	if got := listCalls.Load(); got != 1 {
 		t.Fatalf("listOffers calls = %d, want one hydration", got)
+	}
+}
+
+func TestDeclineSkipsLogsOnlyAtDebug(t *testing.T) {
+	skips := make([]types.OfferSkip, observability.MaxReasonExamples+3)
+	for i := range skips {
+		skips[i] = types.OfferSkip{AuctionID: int64(i), Reason: "maxRate is unresolved"}
+	}
+	for _, verbosity := range []int{0, 1} {
+		var lines []string
+		log := funcr.New(func(_, args string) { lines = append(lines, args) }, funcr.Options{Verbosity: verbosity})
+		declineSkips(observability.WithLogger(t.Context(), log), "auction_skipped", "auctions not offerable", skips)
+		switch {
+		case verbosity == 0 && len(lines) != 0:
+			t.Fatalf("debug off logged %q", lines)
+		case verbosity == 1 && (len(lines) != 1 || !strings.Contains(lines[0], `"3 more"`) || !strings.Contains(lines[0], `"auction #: maxRate is unresolved"=23`)):
+			t.Fatalf("debug on logged %q, want one capped summary", lines)
+		}
 	}
 }

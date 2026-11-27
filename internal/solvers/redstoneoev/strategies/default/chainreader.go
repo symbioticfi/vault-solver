@@ -52,14 +52,21 @@ func (r *chainReader) ResolveParams(ctx context.Context, morphoAddr common.Addre
 	out := make(map[common.Hash]MarketParams, len(ids))
 	for i, id := range ids {
 		if !res[i].Success {
+			observability.Log(ctx).V(1).Info("dropping market: idToMarketParams call reverted", "id", id.Hex())
 			continue
 		}
 		mp, derr := decodeMarketParams(res[i].ReturnData)
 		if derr != nil {
+			observability.Log(ctx).V(1).Info("dropping market: undecodable params", "id", id.Hex(), "reason", derr.Error())
 			continue
 		}
-		if derived, verr := deriveMarketID(mp); verr != nil || derived != id {
-			observability.Log(ctx).V(1).Info("market id mismatch; dropping", "id", id.Hex())
+		derived, verr := deriveMarketID(mp)
+		if verr != nil {
+			observability.Log(ctx).V(1).Info("dropping market: params do not hash", "id", id.Hex(), "reason", verr.Error())
+			continue
+		}
+		if derived != id {
+			observability.Log(ctx).V(1).Info("market id mismatch; dropping", "id", id.Hex(), "derived", derived.Hex())
 			continue
 		}
 		out[id] = mp
@@ -118,14 +125,22 @@ func (r *chainReader) ReadTestMarketStates(ctx context.Context, morphoAddr commo
 		marketRes := res[i*2]
 		priceRes := res[i*2+1]
 		if !marketRes.Success || !priceRes.Success {
+			observability.Log(ctx).V(1).Info("dropping market: read reverted", "id", id.Hex(),
+				"marketOk", marketRes.Success, "priceOk", priceRes.Success)
 			continue
 		}
 		state, ok := decodeTestMarketState(marketRes.ReturnData, params[id])
 		if !ok {
+			observability.Log(ctx).V(1).Info("dropping market: undecodable market state", "id", id.Hex())
 			continue
 		}
 		price, err := oracleABI.UnpackPrice(priceRes.ReturnData)
-		if err != nil || price == nil || price.Sign() <= 0 {
+		if err != nil {
+			observability.Log(ctx).V(1).Info("dropping market: undecodable oracle price", "id", id.Hex(), "reason", err.Error())
+			continue
+		}
+		if price == nil || price.Sign() <= 0 {
+			observability.Log(ctx).V(1).Info("dropping market: oracle price not positive", "id", id.Hex(), "price", price)
 			continue
 		}
 		markets[id] = MarketInfo{Params: params[id], State: state}
@@ -158,10 +173,13 @@ func (r *chainReader) ReadTestPositions(ctx context.Context, morphoAddr common.A
 	out := make(map[common.Hash]map[common.Address]morpho.PositionState, len(ids))
 	for i, s := range slots {
 		if !res[i].Success {
+			observability.Log(ctx).V(1).Info("dropping position: read reverted", "id", s.id.Hex(), "borrower", s.borrower.Hex())
 			continue
 		}
 		pos, err := morphoABI.UnpackPosition(res[i].ReturnData)
 		if err != nil {
+			observability.Log(ctx).V(1).Info("dropping position: undecodable", "id", s.id.Hex(),
+				"borrower", s.borrower.Hex(), "reason", err.Error())
 			continue
 		}
 		if pos.BorrowShares == nil || pos.Collateral == nil || (pos.BorrowShares.Sign() == 0 && pos.Collateral.Sign() == 0) {

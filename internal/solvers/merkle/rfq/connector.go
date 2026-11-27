@@ -33,18 +33,18 @@ func buildFill(ctx context.Context, w *connector.Workflow, order executor.IReact
 	requests := make([]connector.Request, 0, len(legs))
 	totalIn := new(big.Int)
 	for _, leg := range legs {
-		amountIn, amountOut := leg.AmountIn, (*big.Int)(nil)
+		amountIn := leg.AmountIn
 		switch {
 		case len(legs) == 1 && amountIn == nil:
-			amountIn, amountOut = order.Request.AmountIn, required
+			amountIn = order.Request.AmountIn
 		case amountIn == nil || amountIn.Sign() <= 0:
-			return builtFill{}, errors.New("connector leg requires positive input")
+			return builtFill{}, errors.Errorf("connector leg %s input %v is not positive", leg.Venue.Hex(), amountIn)
 		}
 		totalIn.Add(totalIn, amountIn)
-		requests = append(requests, leg.Request(order.Request.TokenIn, amountIn, token, amountOut))
+		requests = append(requests, leg.Request(order.Request.TokenIn, amountIn, token))
 	}
 	if totalIn.Cmp(order.Request.AmountIn) != 0 {
-		return builtFill{}, errors.New("connector leg inputs do not sum to the signed order input")
+		return builtFill{}, errors.Errorf("connector leg inputs sum to %s, not the signed order input %s", totalIn, order.Request.AmountIn)
 	}
 	prepared, err := w.PrepareLegs(ctx, requests, backend.resolveDiscount)
 	if err != nil {
@@ -71,7 +71,7 @@ func buildFill(ctx context.Context, w *connector.Workflow, order executor.IReact
 		}
 	}
 	if totalOut.Cmp(required) < 0 {
-		return builtFill{}, errors.New("connector legs do not cover the signed order output")
+		return builtFill{}, errors.Errorf("connector legs pay %s below the signed order output %s", totalOut, required)
 	}
 	data, err := executorCallsArgs.Pack(calls)
 	if err != nil {

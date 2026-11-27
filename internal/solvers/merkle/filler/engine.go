@@ -18,11 +18,12 @@ import (
 )
 
 const (
-	pollInterval     = 3 * time.Second
-	operationTimeout = 30 * time.Second
-	// confirmationPatience is how long a consumed nonce without a confirmed receipt is treated as
+	pollInterval = 3 * time.Second
+	// OperationTimeout bounds each phase of planning and submitting a fill.
+	OperationTimeout = 30 * time.Second
+	// ConfirmationPatience is how long a consumed nonce without a confirmed receipt is treated as
 	// an included fill awaiting its confirmations rather than as a failure worth an error log.
-	confirmationPatience = 2 * time.Minute
+	ConfirmationPatience = 2 * time.Minute
 )
 
 var tracer = observability.NewTracer("github.com/symbioticfi/vault-solver/internal/solvers/merkle/filler", "")
@@ -56,9 +57,6 @@ type Outcome struct {
 	Reverted bool
 }
 
-// Next returns the next executable fill, or nil when nothing is ready.
-type Next func(ctx context.Context) (*Intent, error)
-
 // Engine owns one settlement contract's Merkle fill lane. At most one fill is in flight:
 // an admitted intent owns the signer lane until its canonical receipt is returned.
 type Engine struct {
@@ -79,7 +77,7 @@ type Engine struct {
 	Decimals Decimals
 
 	intent atomic.Pointer[Intent]
-	// stalled is set once Await finds the sender dropped the intent's transaction.
+	// stalled is set when the driver finds the sender dropped the intent's transaction.
 	stalled atomic.Bool
 }
 
@@ -135,13 +133,13 @@ func (e *Engine) ResolveRoute(venue, rwa, asset common.Address) (executor, accou
 	return e.Routes.Resolve(venue, rwa, asset)
 }
 
-// Reservations subtracts pending and not-yet-reflected canonical spends from quote inventory.
+// Reservations subtracts queued, pending and not-yet-reflected canonical spends from quote inventory.
 func (e *Engine) Reservations(inventory []liquidlane.Inventory) liquidlane.CapacityReservations {
 	return e.Spends.Reservations(inventory)
 }
 
 // Stalled reports a lane that still owns a fill its sender has dropped: no receipt can settle
-// it any more, so the lane accepts no work until restart. Only Await decides it: a lane between
+// it any more, so the lane accepts no work until restart. Only the driver decides it: a lane between
 // publishing an intent and handing it to the sender, or between a receipt and settling it,
 // briefly looks the same.
 func (e *Engine) Stalled() bool { return e.stalled.Load() }
@@ -161,13 +159,32 @@ func (e *Engine) deadline() time.Time {
 // captured before submission because a timeout may follow a send; a submission error keeps
 // ownership whenever the sender does.
 func (e *Engine) Submit(ctx context.Context, intent *Intent) error {
+	if err := e.reserve(intent); err != nil {
+		return err
+	}
+	return e.send(ctx, intent)
+}
+
+func (e *Engine) reserve(intent *Intent) error {
 	if !e.intent.CompareAndSwap(nil, intent) {
-		return ErrBusy
+		return e.errBusy()
 	}
 	if err := e.Spends.Reserve(intent.OrderID, intent.Spend); err != nil {
 		e.intent.CompareAndSwap(intent, nil)
 		return err
 	}
+	return nil
+}
+
+// errBusy names the fill that owns the signer lane.
+func (e *Engine) errBusy() error {
+	if pending := e.Pending(); pending != nil {
+		return errors.Errorf("%w: order %s owns the signer lane", ErrBusy, pending.OrderID)
+	}
+	return errors.Errorf("%w: another fill took the signer lane", ErrBusy)
+}
+
+func (e *Engine) send(ctx context.Context, intent *Intent) error {
 	err := e.Sender.Submit(ctx, transaction.ExecutionRequest{To: e.Workflow.Filler, Data: intent.Data})
 	if err != nil && !e.Sender.Busy() && e.intent.CompareAndSwap(intent, nil) {
 		e.Spends.Release(intent.OrderID)
@@ -217,21 +234,23 @@ func (e *Engine) Await(ctx context.Context) (*Outcome, error) {
 	defer ticker.Stop()
 	var included time.Time
 	for {
-		if e.Pending() == nil {
+		intent := e.Pending()
+		if intent == nil {
 			return nil, nil
 		}
+		log := observability.Log(ctx).WithValues("orderId", intent.OrderID)
 		outcome, err := e.Poll(ctx)
 		if outcome != nil {
 			return outcome, nil
 		}
-		if e.Sender != nil && !e.Sender.Busy() {
+		if !e.Sender.Busy() {
 			e.stalled.Store(true)
 			if err == nil {
 				err = ErrLaneStalled
 			} else {
 				err = errors.Errorf("%w: %w", ErrLaneStalled, err)
 			}
-			observability.Log(ctx).Error(err, "fill lane stalled; restart required")
+			log.Error(err, "fill lane stalled; restart required")
 			return nil, err
 		}
 		if err != nil && e.LaneReady != nil && !e.LaneReady() {
@@ -245,10 +264,10 @@ func (e *Engine) Await(ctx context.Context) (*Outcome, error) {
 		}
 		switch {
 		case err == nil || ctx.Err() != nil:
-		case awaitingConfirmations && time.Since(included) < confirmationPatience:
-			observability.Log(ctx).V(1).Info("fill included; awaiting confirmations")
+		case awaitingConfirmations && time.Since(included) < ConfirmationPatience:
+			log.V(1).Info("fill included; awaiting confirmations")
 		default:
-			observability.Log(ctx).Error(err, "fill poll failed")
+			log.Error(err, "fill poll failed")
 		}
 		select {
 		case <-ctx.Done():
@@ -258,50 +277,74 @@ func (e *Engine) Await(ctx context.Context) (*Outcome, error) {
 	}
 }
 
-// Tick advances the lane once: it polls the pending fill, or asks next for a new one.
-func (e *Engine) Tick(ctx context.Context, next Next) (err error) {
-	ctx, end := tracer.Start(ctx, e.Name+".poll", observability.AttrSolver.String(e.Name))
-	defer func() { end(err) }()
-	if e.Pending() != nil {
-		_, err = e.Poll(ctx)
-		return err
-	}
-	if e.Sender.Busy() {
-		return errors.New("fill sender has work without a fill owner")
-	}
-	if err := e.Initialize(ctx); err != nil {
-		return err
-	}
-	intent, err := next(ctx)
-	if err != nil || intent == nil {
-		return err
-	}
-	return e.Submit(ctx, intent)
-}
-
-// Run drives a pull-based filler until ctx ends. A settled fill advances straight to the
-// next one; pending work waits for the polling timer.
-func (e *Engine) Run(ctx context.Context, next Next) error {
+// Run polls awards while one worker owns submission and receipt tracking. An
+// executable intent can accompany an error from the independent award refresh.
+func (e *Engine) Run(ctx context.Context, next func(context.Context, bool) (*Intent, error)) error {
 	if err := e.Initialize(ctx); err != nil {
 		return err
 	}
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
-	for {
-		pending := e.Pending() != nil
-		run, cancel := context.WithTimeout(ctx, operationTimeout)
-		err := e.Tick(run, next)
-		cancel()
-		if err != nil && ctx.Err() == nil {
-			observability.Log(ctx).Error(err, "Merkle fill iteration failed")
+	var fill <-chan bool
+	defer func() {
+		if fill != nil {
+			<-fill
 		}
-		if pending && e.Pending() == nil && err == nil {
-			continue
+	}()
+	for {
+		idle := fill == nil && e.Pending() == nil
+		intent, err := func() (_ *Intent, err error) {
+			run, end := tracer.Start(ctx, e.Name+".poll", observability.AttrSolver.String(e.Name))
+			defer func() { end(err) }()
+			return next(run, idle)
+		}()
+		if idle && intent != nil && ctx.Err() == nil {
+			var startErr error
+			fill, startErr = e.startFill(ctx, intent)
+			err = errors.Join(err, startErr)
+		}
+		if err != nil && ctx.Err() == nil {
+			observability.Log(ctx).Error(err, "Merkle award iteration failed")
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
+		case settled := <-fill:
+			fill = nil
+			if !settled {
+				// Retry unsigned errors on the normal cadence.
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-ticker.C:
+				}
+			}
 		}
 	}
+}
+
+func (e *Engine) startFill(ctx context.Context, intent *Intent) (<-chan bool, error) {
+	if e.Sender.Busy() {
+		return nil, errors.Errorf("%w: the fill sender still tracks a transaction", ErrBusy)
+	}
+	if err := e.reserve(intent); err != nil {
+		return nil, err
+	}
+	done := make(chan bool, 1)
+	go func() {
+		log := observability.Log(ctx).WithValues("orderId", intent.OrderID)
+		send, cancel := context.WithTimeout(ctx, OperationTimeout)
+		err := e.send(send, intent)
+		cancel()
+		if err != nil && ctx.Err() == nil {
+			log.Error(err, "Merkle fill submission failed")
+		}
+		outcome, err := e.Await(ctx)
+		if errors.Is(err, ErrLaneStopped) && ctx.Err() == nil {
+			log.Error(err, "Merkle fill tracking stopped")
+		}
+		done <- outcome != nil
+	}()
+	return done, nil
 }

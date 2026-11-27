@@ -2,6 +2,7 @@ package connector
 
 import (
 	"math/big"
+	"slices"
 	"testing"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -35,6 +36,46 @@ func TestPendingFillDoesNotDisableQuotesForUnspentCapacity(t *testing.T) {
 	}
 }
 
+func TestQueuedReservationTracksSubmissionAndExpiry(t *testing.T) {
+	ledger := NewSpendLedger()
+	queued := testSpend()
+	queued.IncludedAt = 0
+	if err := ledger.ReserveQueued("award", queued); err != nil {
+		t.Fatal(err)
+	}
+	if len(ledger.ReservationsExcluding(nil, "award")) != 0 {
+		t.Fatal("award could not use its own virtual reservation")
+	}
+	actual := queued
+	actual.Amounts = liquidlane.CapacityReservations{testCapacityID(): big.NewInt(110)}
+	if err := ledger.Reserve("award", actual); err != nil {
+		t.Fatal(err)
+	}
+	if got := ledger.Reservations(nil)[testCapacityID()]; got == nil || got.Int64() != 110 {
+		t.Fatalf("submitted spend must replace the estimate, got %v", got)
+	}
+	ledger.Release("award")
+	if got := ledger.Reservations(nil)[testCapacityID()]; got == nil || got.Int64() != 100 {
+		t.Fatalf("open award lost its virtual reservation, got %v", got)
+	}
+	if err := ledger.Reserve("award", actual); err != nil {
+		t.Fatal(err)
+	}
+	if expired := ledger.Expire(queued.Deadline); !slices.Equal(expired, []Expired{{ID: "award", Deadline: 100, Queued: true}}) {
+		t.Fatalf("expiry reported %+v, want the queued award", expired)
+	}
+	if got := ledger.Reservations(nil)[testCapacityID()]; ledger.Queued("award") || got == nil || got.Int64() != 110 {
+		t.Fatalf("expiry must release the estimate and retain signed capacity: %v", got)
+	}
+	actual.IncludedAt = 8
+	if err := ledger.Include("award", actual); err != nil {
+		t.Fatal(err)
+	}
+	if ledger.Queued("award") || len(ledger.Reservations(spendInventory(8))) != 0 {
+		t.Fatal("confirmed fill remained virtually reserved against a fresh snapshot")
+	}
+}
+
 func TestFreshSnapshotPrunesSpendWithoutReopeningOlderInventory(t *testing.T) {
 	ledger := NewSpendLedger()
 	if err := ledger.Include("award", testSpend()); err != nil {
@@ -63,7 +104,9 @@ func TestSpendExpiryRetainsCanonicalAccounting(t *testing.T) {
 	if err := ledger.Include("award", testSpend()); err != nil {
 		t.Fatal(err)
 	}
-	ledger.Expire(99)
+	if expired := ledger.Expire(99); len(expired) != 0 {
+		t.Fatalf("expiry before the deadline reported %+v", expired)
+	}
 	if !ledger.Finalized("award") || len(ledger.spends) != 1 {
 		t.Fatal("completed award expired before signed deadline")
 	}
@@ -73,7 +116,10 @@ func TestSpendExpiryRetainsCanonicalAccounting(t *testing.T) {
 	if err := ledger.Reserve("pending", pending); err != nil {
 		t.Fatal(err)
 	}
-	ledger.Expire(100)
+	// The pending fill has no completed entry: only the included award retires.
+	if expired := ledger.Expire(100); !slices.Equal(expired, []Expired{{ID: "award", Deadline: 100}}) {
+		t.Fatalf("expiry reported %+v, want the completed award", expired)
+	}
 	if ledger.Finalized("award") || len(ledger.spends) != 1 || ledger.spends["pending"].IncludedAt != 0 || ledger.watermarks[testCapacityID()] != 8 {
 		t.Fatal("expiry retained canonical details or released unresolved signed work")
 	}
@@ -101,7 +147,9 @@ func TestNilLedgerReservesNothing(t *testing.T) {
 		ledger.Reserve("award", testSpend()) != nil {
 		t.Fatal("nil ledger tracked a spend")
 	}
-	ledger.Expire(100)
+	if ledger.Expire(100) != nil {
+		t.Fatal("nil ledger expired a spend")
+	}
 }
 
 func TestSplitFillPrunesEachCapacityAgainstItsOwnSnapshot(t *testing.T) {

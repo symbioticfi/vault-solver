@@ -318,14 +318,14 @@ func TestParseAndResolveOrder(t *testing.T) {
 				mutate: func(candidate *v2Order) {
 					candidate.CosignerData.InputOverride = big.NewInt(101)
 				},
-				wantErr: "input override exceeds base start",
+				wantErr: "cosigner input override 101 exceeds base start amount 100",
 			},
 			{
 				name: "output below base start",
 				mutate: func(candidate *v2Order) {
 					candidate.CosignerData.OutputOverrides = []*big.Int{big.NewInt(219)}
 				},
-				wantErr: "output override 0 is below base start",
+				wantErr: "cosigner output override 0 (219) is below base start amount 220",
 			},
 		}
 		for _, test := range tests {
