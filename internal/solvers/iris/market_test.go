@@ -147,31 +147,8 @@ func TestDecodeMarket(t *testing.T) {
 		equal(t, big.NewInt(want.maxDuration), m.MaxDuration)
 		equal(t, big.NewInt(want.apr), m.MinFixedRate)
 		equal(t, uint64(1800), m.MaxLifetime)
-		ok(t, !m.paddedBond)
 		equal(t, domainSeparator(big.NewInt(1), fixtureIris), m.Domain)
 	}
-}
-
-func TestLegacyPaddedOffer(t *testing.T) {
-	fixture := loadFixture(t)
-	raw, err := os.ReadFile("testdata/ui/padded-offer.json")
-	must(t, err)
-	var offer uiRecipe
-	must(t, json.Unmarshal(raw, &offer))
-	fixture.Offers[0] = offer
-	prepared, tree := fixtureMarket(t, fixture, 0)
-	hash, err := recipes.HashRecipe(prepared.Recipe)
-	must(t, err)
-	equal(t, offer.RecipeHash, hash)
-	market, err := decodeMarket(prepared, tree, fixtureIris, big.NewInt(1))
-	must(t, err)
-	ok(t, market.paddedBond)
-	chain := &batchedChain{&fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(40e6)}}
-	solver := &Solver{chain: chain}
-	r := request{Duration: big.NewInt(86400), Debt: big.NewInt(1e6), Collateral: big.NewInt(1e18), VenueBitmap: big.NewInt(1)}
-	candidates, err := solver.preflight(t.Context(), []candidate{{market: market, quote: newQuote(r, market, big.NewInt(4e16))}}, big.NewInt(1), false)
-	must(t, err)
-	equal(t, big.NewInt(37_500_000), candidates[0].quote.Bond)
 }
 
 func TestDecodeMarketRejects(t *testing.T) {
@@ -205,6 +182,16 @@ func TestDecodeMarketRejects(t *testing.T) {
 		}},
 		{name: "bond from the keeper", iris: fixtureIris, chainID: 1, mutate: func(_ *uiFixture, p *recipes.PreparedRecipe) {
 			rebind(t, p, bondWord, recipes.Value{Source: recipes.Input, Value: big.NewInt(9)})
+		}},
+		{name: "bond with extra arithmetic", iris: fixtureIris, chainID: 1, mutate: func(_ *uiFixture, p *recipes.PreparedRecipe) {
+			// Point the bond binding at the recipe's addition instead of the BLM result.
+			for i, step := range p.Recipe.Steps {
+				if step[0] == recipes.Add {
+					rebind(t, p, bondWord, recipes.Value{Source: recipes.Result, Value: big.NewInt(int64(i))})
+					return
+				}
+			}
+			t.Fatal("fixture needs an addition step")
 		}},
 		{name: "collateral from the keeper", iris: fixtureIris, chainID: 1, mutate: func(_ *uiFixture, p *recipes.PreparedRecipe) {
 			rebind(t, p, 5, recipes.Value{Source: recipes.Input, Value: big.NewInt(0)})

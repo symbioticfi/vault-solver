@@ -29,9 +29,8 @@ type Market struct {
 	MaxDebt, MaxDuration, MinFixedRate *big.Int
 	MaxLifetime                        uint64
 
-	paddedBond bool
-	prepared   recipes.PreparedRecipe
-	tree       *recipes.Tree
+	prepared recipes.PreparedRecipe
+	tree     *recipes.Tree
 }
 
 // fixedWords are the Quote words the recipe must bind to constants; the decoder reads the
@@ -108,9 +107,8 @@ func decodeMarket(prepared recipes.PreparedRecipe, tree *recipes.Tree, iris comm
 			return Market{}, errors.Errorf("Quote word %d must be bound to input %d", w, i)
 		}
 	}
-	paddedBond, recognized := bondPolicy(recipe, bound[bondWord])
-	if !recognized {
-		return Market{}, errors.New("recipe must use the Iris minimum bond or the legacy padded bond")
+	if !usesMinimumBond(recipe, bound[bondWord]) {
+		return Market{}, errors.New("recipe must use the Iris minimum bond")
 	}
 	fixed := make(map[int]*big.Int, len(fixedWords))
 	for _, w := range fixedWords {
@@ -123,7 +121,7 @@ func decodeMarket(prepared recipes.PreparedRecipe, tree *recipes.Tree, iris comm
 	market := Market{
 		Executor: snapshot.Executor, Account: snapshot.Account, Iris: iris, Domain: domain,
 		OverdueRate: fixed[11], OverduePeriod: fixed[12], BondLltv: fixed[14], DataHash: common.BigToHash(fixed[19]),
-		paddedBond: paddedBond, prepared: prepared, tree: tree,
+		prepared: prepared, tree: tree,
 	}
 	for w, target := range map[int]*common.Address{4: &market.Blm, 5: &market.CollateralToken, 6: &market.DebtToken} {
 		var ok bool
@@ -141,43 +139,18 @@ func decodeMarket(prepared recipes.PreparedRecipe, tree *recipes.Tree, iris comm
 	return market, nil
 }
 
-// bondPolicy distinguishes the UI's exact minimum from its historical r + floor((r+3)/4).
-func bondPolicy(recipe recipes.Recipe, bond recipes.Value) (padded, ok bool) {
-	requirement := bond
-	parts := resultOperands(recipe, bond, recipes.Add, 2)
-	if padded = parts != nil; padded {
-		requirement = parts[0]
-		quarter := resultOperands(recipe, parts[1], recipes.MulDiv, 3)
-		if quarter == nil || !literalIs(quarter[1], 1) || !literalIs(quarter[2], 4) {
-			return false, false
-		}
-		numerator := resultOperands(recipe, quarter[0], recipes.Add, 2)
-		if numerator == nil || numerator[0].Source != recipes.Result ||
-			requirement.Source != recipes.Result || numerator[0].Value.Cmp(requirement.Value) != 0 ||
-			!literalIs(numerator[1], 3) {
-			return false, false
-		}
-	}
-
-	// BLM computes floor(principal * ratio / WAD).
-	operands := resultOperands(recipe, requirement, recipes.MulDiv, 3)
-	return padded, operands != nil && isInput(operands[0], debtInput) && literalIs(operands[2], 1e18)
-}
-
-func resultOperands(recipe recipes.Recipe, v recipes.Value, op byte, count int) []recipes.Value {
-	step, ok := resultStep(recipe, v)
-	if !ok || recipe.Steps[step][0] != op {
-		return nil
+// usesMinimumBond checks the BLM's floor(principal * ratio / WAD) at the quote binding.
+func usesMinimumBond(recipe recipes.Recipe, bond recipes.Value) bool {
+	step, ok := resultStep(recipe, bond)
+	if !ok || recipe.Steps[step][0] != recipes.MulDiv {
+		return false
 	}
 	values, err := recipes.Operands(recipe, uint(step))
-	if err != nil || len(values) != count {
-		return nil
+	if err != nil || len(values) != 3 || !isInput(values[0], debtInput) {
+		return false
 	}
-	return values
-}
-
-func literalIs(v recipes.Value, n int64) bool {
-	return v.Source == recipes.Literal && v.Value != nil && v.Value.Cmp(big.NewInt(n)) == 0
+	divisor := values[2]
+	return divisor.Source == recipes.Literal && divisor.Value.Cmp(big.NewInt(1e18)) == 0
 }
 
 // signBindings requires the sign leaf to mask every Quote word except the type hash and the

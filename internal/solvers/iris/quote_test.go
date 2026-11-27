@@ -63,12 +63,6 @@ func morphoMarketData(t *testing.T) []byte {
 	return raw
 }
 
-func TestPadBondMatchesTheRecipe(t *testing.T) {
-	for requirement, want := range map[int64]int64{1: 2, 4: 5, 5: 7, 30_000_000: 37_500_000, 30_000_001: 37_500_002} {
-		equal(t, big.NewInt(want), padBond(big.NewInt(requirement)), requirement)
-	}
-}
-
 func TestDigestMatchesAPITypes(t *testing.T) {
 	q := testQuote(Market{
 		Account: common.HexToAddress("0xACC"), Blm: common.HexToAddress("0x702"), CollateralToken: common.HexToAddress("0x703"),
