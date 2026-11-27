@@ -55,6 +55,7 @@ the same nonce; nonce handling does not coordinate their liquidity or off-chain 
 | `uniswapx-filler` | UniswapX V2 RFQ quoting and LiquidLane filling | [plan](docs/UNISWAPX-PLAN.md) | [yaml](config/uniswapx.example.yaml) |
 | `lifi-merkle` | LI.FI same-chain intents through Merkle recipes | [plan](docs/MERKLE-FILLERS.md) | [yaml](config/lifi-merkle.example.yaml) |
 | `uniswapx-merkle` | UniswapX V2 RFQ quoting and filling through Merkle recipes | [plan](docs/MERKLE-FILLERS.md) | [yaml](config/uniswapx-merkle.example.yaml) |
+| `iris` | IRIS fixed-rate solver quotes signed by a Merkle account | [plan](docs/IRIS-PLAN.md) | [yaml](config/iris.example.yaml) |
 
 The Merkle 3F solver retries uncertain offer submissions with the original nonce and terms.
 New offers use random positive 63-bit nonces to fit 3F's off-chain storage.
@@ -497,6 +498,53 @@ orders and secondary-DEX routes are not supported. Design,
 config, onboarding, and deployment prerequisites:
 [`docs/UNISWAPX-PLAN.md`](docs/UNISWAPX-PLAN.md) · example
 [`config/uniswapx.example.yaml`](config/uniswapx.example.yaml).
+
+### IRIS Solver — `iris`
+
+Answers the [IRIS](https://docs.iris.credit) RFQ coordinator for one Merkle account, which is
+the registered IRIS solver. The account signs quotes through ERC-1271, so there is no quote
+signing key: each firm quote is presigned on-chain by the account's offer recipe before it
+is returned, and Iris pulls the bond from the account at `take`.
+
+- Markets are not configured. Each `recipeExecutors` entry is one market's offer executor,
+  created in the curator UI (Automations, IRIS). The solver reads the market (tokens, venue,
+  payload hash, BLM, bond LLTV, overdue terms) and its limits (principal cap, tenor cap, APR
+  floor) from the recipe. Morpho market payloads are read from `morpho`. Every executor must
+  serve `account` through a caller (the vault's AccessManager, or the signer) that admits
+  the signer. A paused executor, or one whose recipe is not an offer program, is logged and
+  left out while the other markets keep quoting. Every `refreshInterval` the solver
+  re-reads each executor's account, caller, recipe hash and block and the account root in
+  one call, and rediscovers markets only when one changed.
+- `POST /quote` tries the markets whose caps admit the request cheapest first. Each is
+  priced from the `pricing` table (raised to the market's APR floor). The bond equals the BLM
+  requirement, and the Iris allowance must cover it and every quote still open. The solver
+  simulates the recipe (which draws any bond shortfall from the curator's funding venues) for
+  the passing markets, sends the cheapest
+  that passes, and returns the quote once the receipt shows the digest is valid. The
+  signature field is 65 zero bytes. One quote is signed at a time; others decline with
+  `solver_busy`, as does a request while the transaction manager is busy. A signature that
+  misses its window is dropped by the shared transaction manager rather than holding the
+  signer.
+- `POST /quote/indicative` returns the same terms unsigned, after the same checks and a
+  simulation of the signing recipe within `txManager.maxGas` (nothing is sent), all in one RPC batch. Declines are `404` with a
+  `reasons` entry, such as `no_market`, `above_market_limits`, `rate_above_max_fixed_rate`
+  (with the rate), `insufficient_bond_allowance` or `insufficient_bond_balance`.
+- The quote deadline must reach the coordinator about 120 s ahead, so the solver dates it
+  from the slot the signature targets (`timing`), sends the signature at once, holds the
+  response if it lands early, and declines a quote mined in a later slot. `submitLead` must
+  cover the route and simulation RPCs as well as propagation; a signature that is not ready
+  before its slot starts is declined unsent (`slot_missed`).
+  This needs `txManager.confirmations` of at most 1 and an IRIS response timeout above
+  `timing.responseBudget` (the IRIS default is 5 s; `overrides.timeout` allows up to 60 s).
+- `server.authHeader` and `server.authValueEnv` are required, because every firm request
+  costs gas. Put the same header in the IRIS registry entry's `headers`.
+- Metrics: `iris_quote_requests_total{kind,outcome}` and `iris_quote_duration_seconds{kind}`.
+  `GET /ready` on the quote server is `503` while the transaction manager cannot accept the
+  signature (not yet started, its nonce held by a strict send, or its queue full); `GET /healthz`
+  is liveness only.
+
+Design and open items: [`docs/IRIS-PLAN.md`](docs/IRIS-PLAN.md) · example
+[`config/iris.example.yaml`](config/iris.example.yaml).
 
 ### Strategies
 
@@ -1201,7 +1249,11 @@ See [the RFQ Merkle runbook](docs/RFQ-MERKLE.md) and [configuration](config/rfq-
 
 Local integration checks require Anvil on `PATH`: `make test-txmanager-anvil`,
 `make test-merkle-sdk-anvil`, and `make test-rfq-merkle-anvil`. They separately exercise the unchanged native transaction engine, RAM SDK ownership,
-and canonical RFQ settlement without live services.
+and canonical RFQ settlement without live services. `make test-iris-fork` runs the `iris`
+solver end to end against a mainnet fork (set `ETH_RPC_URL_MAINNET`) on the curator UI's own
+recipes: quotes on Aave and Morpho markets, bond funding from Aave, the borrower's `take` on
+the deployed Iris, and settlement back to the account. `make refresh-iris-fixture` recompiles
+those recipes from a curator-frontend checkout.
 
 Merkle integrations, including the recipe mode of `rfq-filler` and the `uniswapx-merkle` and `lifi-merkle` solvers,
 use the same SDK transaction implementation as merkle-executor.

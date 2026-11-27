@@ -28,6 +28,7 @@ ADAPTERS_OUT ?= ../adapters/out
 # Pinned sibling builds for the test-only canonical RFQ outer-fill artifact.
 RFQ_FIXTURE_ROOT ?= ../rfq
 ADAPTERS_FIXTURE_ROOT ?= ../adapters
+CURATOR_FRONTEND_ROOT ?= ../curator-frontend
 FIXTURE_SOLC ?= solc
 # Production 3F OpenAPI contract, matching schema-sources.json.
 OPENAPI_URL ?= https://bf.3f.xyz/docs/openapi.json
@@ -47,6 +48,8 @@ MORPHO_GRAPHQL_URL ?= https://api.morpho.org/graphql
 # WebSocket (the zod schema they shared directly is not published anywhere). The raw-markdown repo is
 # gone, so this is the rendered Docusaurus page; hack/docusaurus-article-extract.py keeps its text.
 REDSTONE_GUIDE_URL       ?= https://docs.redstone.finance/docs/stage2-capital-efficiency/atom/integration-guide/
+# IRIS publishes no OpenAPI document; this Markdown page is the iris solver's wire contract.
+IRIS_RFQ_API_URL         ?= https://docs.iris.credit/rfq/api-reference.md
 
 # Contracts whose ABIs are vendored via refresh-abi. ABIS come from the rfq Foundry build; the
 # CORE_MIRROR_ABIS (the 3F ThreeFAdapter, LiquidLane adapter, adapter factory, universal delegator,
@@ -81,6 +84,7 @@ BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
             AdaptiveCurveIrm:oev/irm MorphoOracle:oev/oracle \
             AggregatorV3:chainlink/aggregator \
             FrontendLiquidityLens:lens \
+            IrisBlm:iris/blm \
             ERC20:erc20 Multicall3:multicall3
 # The OEV contracts (Morpho + its AdaptiveCurve IRM + market oracle, RedStone
 # Executor, SymbioticOevSolver), the LI.FI input settler ABI, plus a minimal ERC20
@@ -88,6 +92,8 @@ BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
 # api/abi/ (not in ABIS/CORE_MIRROR_ABIS/refresh-abi). RedStoneExecutor avoids the rfq Executor
 # name clash; solver ERC-20 reads (asset/balanceOf) reuse erc4626, the generic chain.Decimals reader
 # uses erc20.
+# api/abi/IrisBlm.json is hand-vendored to IBlm.bondRequirement(Quote) from iris-core
+# src/interfaces/IBlm.sol: IRIS ships no ABI artifact and the solver only reads the requirement.
 # Multicall3 is v2 like everything else — api/abi/Multicall3.json is hand-vendored (not a Foundry contract),
 # so it's in BINDINGS_V2 but not ABIS. The chain.Multicall transport packs/unpacks aggregate3 and does its
 # own eth_call. getCurrentBlockTimestamp is sourced from
@@ -175,6 +181,15 @@ refresh-redstone-guide: ## Re-pull RedStone's public Atom OEV integration guide 
 		curl -fsSL --max-time 90 "$(REDSTONE_GUIDE_URL)" | python3 hack/docusaurus-article-extract.py > "$$tmp"; \
 		test -s "$$tmp"; \
 		mv "$$tmp" openapi/redstone-oev-atom-integration-guide.md
+
+.PHONY: refresh-iris-rfq-api
+refresh-iris-rfq-api: ## Re-pull the IRIS RFQ API reference the iris solver serves (IRIS_RFQ_API_URL=...)
+	@mkdir -p openapi
+	@set -euo pipefail; tmp="$$(mktemp openapi/.refresh.XXXXXX)"; \
+		trap 'rm -f "$$tmp"' EXIT; \
+		curl -fsSL --max-time 90 "$(IRIS_RFQ_API_URL)" > "$$tmp"; \
+		test -s "$$tmp"; \
+		mv "$$tmp" openapi/iris-rfq-api-reference.md
 
 .PHONY: refresh-morpho-graphql-schema
 refresh-morpho-graphql-schema: ## Re-pull the live Morpho GraphQL schema SDL (MORPHO_GRAPHQL_URL=...)
@@ -312,6 +327,15 @@ refresh-rfq-merkle-fixture: ## Re-vendor pinned canonical EVM fixture artifacts 
 test-rfq-merkle-anvil: ## Execute canonical RFQ outer settlement boundaries on local Anvil
 	@command -v anvil >/dev/null
 	go test -race -tags integration -run '^TestAnvil(ConnectorOuterFillCanonicalBoundaries|SplitConnectorOrder)$$' -v ./internal/solvers/merkle/rfq
+
+.PHONY: test-iris-fork
+test-iris-fork: ## Run the IRIS solver end to end against a mainnet fork (needs ETH_RPC_URL_MAINNET)
+	@command -v anvil >/dev/null
+	go test -tags integration -run TestForkIrisEndToEnd -failfast -v -timeout 18m ./internal/solvers/iris
+
+.PHONY: refresh-iris-fixture
+refresh-iris-fixture: ## Recompile the IRIS recipes with the curator UI (a curator-frontend checkout with pnpm install done)
+	python3 internal/solvers/iris/testdata/ui/generate.py --frontend-root "$(CURATOR_FRONTEND_ROOT)"
 
 .PHONY: test-merkle-sdk-anvil
 test-merkle-sdk-anvil: ## Exercise RAM SDK ownership and canonical settlement on local Anvil
