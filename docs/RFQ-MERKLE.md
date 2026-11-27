@@ -59,9 +59,11 @@ Quote capacity is grouped by account and funding asset, not executor. Overlappin
 recipes are alternatives; they cannot multiply that balance within a quote.
 Use one order poller per RFQ Executor/filler identity; a second process for quotes must
 set `quoteOnly: true`.
-Polling is every three seconds. Once a pending fill settles, the loop checks the
-next award immediately; pending work and uncertain failures use the normal cadence.
-Each iteration has a thirty-second context and fetches at most 100 open orders.
+The award loop polls every three seconds during signing and confirmation. Reading all
+open-order pages oldest first and refreshing reservations share a thirty-second timeout.
+Preparation gets its own thirty-second timeout after a usable snapshot is fetched.
+Split prices are reused for matching listings at the same observed block. A settled
+fill wakes the loop to submit the next executable award.
 Curator HTTP limits are ten seconds and 2 MiB. Secret configuration contains
 environment variable names. The execution-only plugin has no quote server. Native RFQ mode keeps its existing
 configurable polling limits.
@@ -71,7 +73,10 @@ The solver tries a single connector first. When it needs multiple connectors, it
 legs using the shared Liquid Lane allocator and the backend's advertised capacity,
 clipped by each connector's current `remainingAssets(token)` policy budget and
 shared account/asset capacity. Each leg uses its own exact on-chain payout, and the
-legs must cover the signed input and output together. Capacity calculation belongs
+legs must cover the signed input and output together. For a single connector,
+the signed output is the minimum for the order. Preparation uses the connector's
+full rounded payout for the recipe approval, balance checks and spend reservation.
+Capacity calculation belongs
 to the backend. It estimates funding from each recipe's reads and checks current
 roles with batched RPC calls. The complete outer settlement simulation checks ordered
 withdrawals and shared liquidity before submission.
@@ -130,20 +135,22 @@ loses intent and transaction tracking while the transaction may still execute.
 Settle old work before upgrading and use one active process per signer.
 
 Quote inventory must match the verified recipe connector, RWA, account and asset.
-Quoting stays available during a fill; execution remains sequential. Before
-submission, each connector payout is reserved against its funding account/asset
-capacity. Other capacity and the unreserved remainder stay quotable. Ambiguous
-submissions keep that reservation, including the gap after sender release and
-before the fill loop records its canonical receipt. Unsigned failures and canonical
-reverts release it. Confirmed spends remain subtracted from older inventory until
-that capacity's snapshots reflect inclusion. Confirmed details compact after fresh
-inventory or the signed deadline; an inclusion watermark prevents later stale
-snapshots from reopening that capacity. Pending reservations survive their deadlines
-until the signed outcome is known.
-Completed award IDs are retained until their signed chain deadlines, preventing
-a still-listed award from being filled twice. Reservations, watermarks and completed
-IDs are RAM only and are lost on process exit. SDK lifecycle readiness keeps the
-quote service in rotation while the transaction lane is occupied.
+Quotes subtract queued payouts and signed spends by funding account and asset.
+The worker replans and simulates one fill at a time, then replaces its own estimate
+with the exact spend. Unsigned failures and reverts restore the estimate for open
+awards. Holds expire at the signed deadline or when a complete poll omits the award.
+Unresolved signed spends stay reserved. A confirmed spend is deducted until the
+inventory reflects inclusion, and its watermark rejects older snapshots.
+Completed award IDs prevent resubmission until their signed deadlines. Reservations,
+watermarks and completed IDs live in RAM.
+
+Sending deployments quote with a ready SDK manager and an award refresh within the
+last two minutes. A completed reservation pass updates freshness before fill preparation.
+An incomplete pass keeps existing reservations and leaves freshness at its prior value.
+Lost receipt ownership stops quoting and keeps the spend reserved.
+Check `solver_bot_workflow_last_event_timestamp{event="order_poll",outcome="success"}`
+for the affected pod. Fill errors carry the order ID. Quote-only deployments serve
+independently of the award poll.
 
 The RFQ bridge ABI comes from [RFQ PR 25](https://github.com/symbioticfi/rfq/pull/25),
 commit `de6dbd617bf3c1e8b4120419cbe5800efae7d410`. Connector and RecipeExecutor use the unchanged canonical adapters contract surface.

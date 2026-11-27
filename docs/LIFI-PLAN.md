@@ -431,8 +431,12 @@ type Strategy interface {
   filler authorization. Internal discount candidates are resolved again through the
   backend, validated against the advertised ID/adapter/token/deadlines and adapter minimum, then priced
   as `getAmountOut * (1 - signedDiscount)`.
-  `DecideFill` returns an immediate `*FillPlan` or `nil`. On a built-in-strategy `nil` with pending reservations,
-  the local deterministic strategy is probed once without them. Only a valid hypothetical plan makes the worker
+  `DecideFill` returns an immediate `*FillPlan` or an error wrapping `types.ErrFillDeclined` that names the
+  failed check and its values (below minimum, deadline inside the execution buffer, exclusivity, no route
+  allocation with the shared greedy solver's last decline, required output above the plan maximum). A webhook
+  `null` maps to one, and a strategy returning neither plan nor error is declined as such. On a built-in-strategy
+  decline with pending reservations, the local deterministic strategy is probed once without them, and the
+  order's decline reason carries both outcomes. Only a valid hypothetical plan makes the worker
   enqueue the order in its bounded retry FIFO. A webhook `null` is not probed with a second request; it and all
   other skipped orders remain terminal. Strategy errors are retried during recovery unless the strategy marks a
   deterministic input rejection as permanent; the default strategy marks malformed or unsupported output contexts,
@@ -1123,7 +1127,9 @@ and post-dequeue/reconnect/replica admissions can repeat: these are not unique u
 client-response totals. The helper retains counters across refreshes; cardinality grows with trusted
 supported route history × fixed event/result/reason sets, not arbitrary inbound addresses or IDs.
 Discount API failure for physical inventory records `discount_api_error`; direct available pairs keep
-normal strategy outcomes. Pair proof is an immutable, atomic snapshot with `quoteTTL` expiry.
+normal strategy outcomes. The default strategy reports why each unquoted pair was dropped in the in-process
+`QuoteOutput.Declines` (not on the webhook wire); a `strategy_declined` rejection logs it as `detail`, while
+the metric label stays the bounded reason. Pair proof is an immutable, atomic snapshot with `quoteTTL` expiry.
 Optional discovery waits and reads for `quoteTTL/3` each, independent of block polling, with no
 startup duplicate or catch-up bursts. Failure never renews expiry. Current catalog is intersected
 with unchanged startup trading directions/units: removal/re-add preserves counters, zero capacity

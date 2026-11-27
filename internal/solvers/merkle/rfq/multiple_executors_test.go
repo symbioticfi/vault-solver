@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/filler"
@@ -41,8 +42,8 @@ func TestMultipleExecutorsShareRouting(t *testing.T) {
 	listing := discounts.ListItem{DiscountPrecision: "100000000", Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectortest.DiscountID().Hex(), MaxAssets: "900"}
 	wrongRWA := listing
 	wrongRWA.TokenToRedeem = common.HexToAddress("0xbad").Hex()
-	intent, err := s.prepare(t.Context(), awardRow(t, order), []discounts.ListItem{wrongRWA, listing})
-	if err != nil || intent != nil {
+	intent, err := prepareAtHead(t, s, awardRow(t, order), []discounts.ListItem{wrongRWA, listing})
+	if err == nil || intent != nil || !strings.Contains(err.Error(), "0 with precision other than 100000000, 1 without a configured recipe route") {
 		t.Fatalf("ambiguous local recipes reached fill: %v", err)
 	}
 }

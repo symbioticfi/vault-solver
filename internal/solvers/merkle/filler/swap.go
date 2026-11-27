@@ -2,7 +2,10 @@ package filler
 
 import (
 	"context"
+	"fmt"
 	"math/big"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -71,7 +74,7 @@ func (b builtSwap) validUntil() time.Time {
 func (e *Engine) buildSwap(ctx context.Context, swap Swap, legs []Leg, resolve connector.ResolveDiscount, envelope Envelope) (builtSwap, error) {
 	requests := make([]connector.Request, len(legs))
 	for i, leg := range legs {
-		requests[i] = leg.Request(swap.TokenIn, leg.AmountIn, swap.TokenOut, nil)
+		requests[i] = leg.Request(swap.TokenIn, leg.AmountIn, swap.TokenOut)
 	}
 	prepared, err := e.Workflow.PrepareLegs(ctx, requests, resolve)
 	if err != nil {
@@ -115,14 +118,22 @@ func (e *Engine) prepareSwap(ctx context.Context, swap Swap, listed []discounts.
 		return nil, nil
 	}
 	if !swap.Expiry.After(observed.Chain) {
-		return nil, errors.Errorf("%w: order expired", ErrNotFillable)
+		return nil, errors.Errorf("%w: order expired: expiry %d is not after chain time %d", ErrNotFillable, swap.Expiry.Unix(), observed.Chain.Unix())
 	}
 	if swap.MinAmountOut == nil || swap.MinAmountOut.Sign() <= 0 {
 		return nil, errors.Errorf("%w: order has no output amount", ErrNotFillable)
 	}
 	var simulation, failure, expiring, declined error
-	// miss records why a candidate fill was not built and keeps the most telling reason.
+	// reasons lists why each route was passed over, so the final error names every failed check.
+	var reasons []string
+	note := func(venue, reason string) {
+		reasons = append(reasons, venue+": "+reason)
+		observability.Log(ctx).V(1).Info("connector route unavailable", "orderId", swap.OrderID, "connector", venue, "reason", reason)
+	}
+	// miss records why a candidate fill was not built and keeps the most telling class.
 	miss := func(venue string, err error) {
+		note(venue, err.Error())
+		err = errors.Errorf("%s: %w", venue, err)
 		switch {
 		case errors.Is(err, ErrSimulation):
 			simulation = err
@@ -134,7 +145,6 @@ func (e *Engine) prepareSwap(ctx context.Context, swap Swap, listed []discounts.
 		case failure == nil:
 			failure = err
 		}
-		observability.Log(ctx).V(1).Info("connector route unavailable", "orderId", swap.OrderID, "connector", venue, "reason", err.Error())
 	}
 	intentFor := func(built builtSwap) (*Intent, error) {
 		validUntil := built.validUntil()
@@ -145,10 +155,10 @@ func (e *Engine) prepareSwap(ctx context.Context, swap Swap, listed []discounts.
 		}
 		deadline, ok := observed.SubmissionDeadline(swap.Expiry, validUntil)
 		if !ok {
-			return nil, errors.Errorf("%w: fill deadline elapsed during preparation", class)
+			return nil, errors.Errorf("%w: %s", class, observed.MissedDeadline(swap.Expiry, validUntil))
 		}
-		if time.Until(deadline) < e.MinValidity {
-			return nil, errors.Errorf("%w: order or discount expires within %s", class, e.MinValidity)
+		if left := time.Until(deadline); left < e.MinValidity {
+			return nil, errors.Errorf("%w: order or discount expires within %s: submission deadline in %s", class, e.MinValidity, left.Round(time.Millisecond))
 		}
 		return &Intent{
 			OrderID: swap.OrderID, Data: built.Data, Deadline: deadline,
@@ -166,7 +176,8 @@ func (e *Engine) prepareSwap(ctx context.Context, swap Swap, listed []discounts.
 		// A connector pays at most its funding not yet spent by this lane: one below the order
 		// output can only take part in a split.
 		single := source
-		if single.MaxAssets = e.unreserved(source, swap.TokenOut); single.MaxAssets.Cmp(swap.MinAmountOut) < 0 {
+		if single.MaxAssets = e.Unreserved(source, swap.TokenOut, ""); single.MaxAssets.Cmp(swap.MinAmountOut) < 0 {
+			note(source.Venue.Hex(), fmt.Sprintf("unreserved %s below order output %s", single.MaxAssets, swap.MinAmountOut))
 			continue
 		}
 		// Keep an executable single-connector fill when one can settle the order.
@@ -183,36 +194,47 @@ func (e *Engine) prepareSwap(ctx context.Context, swap Swap, listed []discounts.
 		}
 		miss(source.Venue.Hex(), err)
 	}
+	if len(reasons) == 0 {
+		note("pair", e.Unmatched(listed, swap.TokenIn, swap.TokenOut))
+	}
 	if swap.MaxRoutes > 1 {
-		legs, err := e.Split(ctx, routes, swap.AmountIn, swap.MinAmountOut, swap.MaxRoutes, observed)
+		legs, err := e.Split(ctx, routes, swap.AmountIn, swap.MinAmountOut, swap.MaxRoutes, observed, "", e.Inventory)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		switch {
-		case err != nil:
-			miss("split", err)
-		case len(legs) > 0:
-			built, err := e.buildSwap(ctx, swap, legs, resolve, envelope)
-			if err == nil {
+		if err == nil {
+			built, buildErr := e.buildSwap(ctx, swap, legs, resolve, envelope)
+			if buildErr == nil {
 				return intentFor(built)
 			}
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			miss("split", err)
+			err = buildErr
 		}
+		miss("split", err)
+	} else {
+		note("split", fmt.Sprintf("disabled, order allows %d route(s)", swap.MaxRoutes))
+	}
+	// also appends the routes passed over for a reason other than the one returned.
+	also := func(head error) error {
+		others := slices.DeleteFunc(reasons, func(reason string) bool { return reason == head.Error() })
+		if len(others) == 0 {
+			return head
+		}
+		return errors.Errorf("%w [also: %s]", head, strings.Join(others, "; "))
 	}
 	switch {
 	case simulation != nil:
-		return nil, simulation
+		return nil, also(simulation)
 	case failure != nil:
-		return nil, errors.Errorf("prepare connector settlement: %w", failure)
+		return nil, errors.Errorf("prepare connector settlement: %w", also(failure))
 	case expiring != nil:
-		return nil, expiring
+		return nil, also(expiring)
 	case declined != nil:
-		return nil, declined
+		return nil, also(declined)
 	default:
-		return nil, ErrNotFillable
+		return nil, errors.Errorf("%w: %s", ErrNotFillable, strings.Join(reasons, "; "))
 	}
 }
 
@@ -241,7 +263,7 @@ func NewSwaps(name string, cfg Config, provider discounts.Provider, deps solver.
 // no fill.
 func (s *Swaps) Fill(ctx context.Context, swap Swap, envelope Envelope) (*Intent, error) {
 	if s.Pending() != nil {
-		return nil, ErrBusy
+		return nil, s.errBusy()
 	}
 	listed, err := s.Discounts.ListDiscounts(ctx)
 	if err != nil {

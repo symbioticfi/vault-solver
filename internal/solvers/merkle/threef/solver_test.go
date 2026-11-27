@@ -3,11 +3,14 @@ package threef
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/go-errors/errors"
 	"github.com/go-logr/zapr"
+	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/vault-solver/internal/observability"
+	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
@@ -53,4 +56,38 @@ func TestLogMintIterationIgnoresSuccessAndShutdown(t *testing.T) {
 	if logs.Len() != 0 {
 		t.Fatalf("unexpected logs: %+v", logs.All())
 	}
+}
+
+type idleMintPlanner struct {
+	keeper.Planning
+
+	cancel context.CancelFunc
+}
+
+func (p idleMintPlanner) PrepareExecution(ctx context.Context, _ []keeper.Strategy) (keeper.ExecutionPlan, error) {
+	defer p.cancel()
+	return keeper.ExecutionPlan{}, mintNotReady(ctx, "no AWAITING_MINT PUSH offer")
+}
+
+// A busy sender prevents the offer workflow from running in this mint-only test.
+type busyMintSender struct{ keeper.Sender }
+
+func (busyMintSender) Busy() bool { return true }
+
+func TestRunRecordsMintSkip(t *testing.T) {
+	rec := tracetest.Install(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	s := Solver{keeper: &keeper.Keeper{
+		Planner: idleMintPlanner{cancel: cancel}, Sender: busyMintSender{},
+		Mode: "simulate", OperationTimeout: time.Second,
+	}}
+	if err := s.Run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("run: %v", err)
+	}
+	span := tracetest.Ended(t, rec, "threef-merkle.mint.tick")
+	if got, count := tracetest.EventAttr(span, "declined", "reason"); count != 1 || got != "no AWAITING_MINT PUSH offer" {
+		t.Fatalf("mint decline count=%d reason=%q", count, got)
+	}
+	tracetest.RequireNoErrorSpans(t, rec)
 }

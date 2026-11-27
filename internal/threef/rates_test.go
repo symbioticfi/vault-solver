@@ -5,6 +5,26 @@ import (
 	"testing"
 )
 
+func TestMinYieldReturnAtPolicyPrecision(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		principal, floor int64
+		precision, want  int64
+	}{
+		{"native ppm", 10_000_001, 190, 1_000_000, 1901},
+		{"merkle 1e8", 10_000_001, 19_000, 100_000_000, 1901},
+		{"exact amount", 10_000_000, 19_000, 100_000_000, 1900},
+		{"zero floor", 10_000_001, 0, 100_000_000, 0},
+		{"invalid precision", 10_000_001, 19_000, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := MinYieldReturn(big.NewInt(tc.principal), big.NewInt(tc.floor), tc.precision); got.Int64() != tc.want {
+				t.Fatalf("minimum yield = %s, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestReturnBounds(t *testing.T) {
 	for _, tc := range []struct {
 		name             string

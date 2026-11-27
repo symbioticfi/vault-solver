@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/big"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -172,7 +173,7 @@ func TestFillPlanningSubtractsOtherWonOrders(t *testing.T) {
 	st.upsertQueued(queuedOrder{OrderID: "other", QuoteID: "q2"})
 	held := liquidlane.CapacityReservations{}
 	held.Add(vltFillCapacity(), maxUint256())
-	if !st.reserve("other", held) {
+	if err := st.reserve("other", held); err != nil {
 		t.Fatal("reserve other order")
 	}
 	txm := &fakeTxm{result: confirmedTxResult()}
@@ -197,19 +198,19 @@ func TestStoreReservationNeverOutlivesOrder(t *testing.T) {
 	st := newStore(func() time.Time { return time.Unix(0, 0) })
 	held := liquidlane.CapacityReservations{}
 	held.Add(vltFillCapacity(), big.NewInt(1))
-	if st.reserve("missing", held) {
-		t.Fatal("reserved an unknown order")
+	if err := st.reserve("missing", held); err == nil || err.Error() != "order is no longer tracked" {
+		t.Fatalf("reserve unknown order = %v", err)
 	}
 	st.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
-	if !st.reserve("o1", held) {
+	if err := st.reserve("o1", held); err != nil {
 		t.Fatal("did not reserve an active order")
 	}
 	st.markStatus("o1", statusExpired, common.Hash{}, "")
 	if st.reserved("o1") {
 		t.Fatal("terminal order kept its reservation")
 	}
-	if st.reserve("o1", held) {
-		t.Fatal("reserved a terminal order")
+	if err := st.reserve("o1", held); err == nil || !strings.Contains(err.Error(), "is not active") {
+		t.Fatalf("reserve terminal order = %v", err)
 	}
 }
 
@@ -307,7 +308,7 @@ func TestPendingReservationsHonourSnapshotBlock(t *testing.T) {
 			st.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
 			held := liquidlane.CapacityReservations{}
 			held.Add(capacityID, big.NewInt(7))
-			if !st.reserve("o1", held) {
+			if err := st.reserve("o1", held); err != nil {
 				t.Fatal("reserve")
 			}
 			if tc.includedAt != 0 {
@@ -359,7 +360,7 @@ func TestQuoteUsesBackendSnapshotBlock(t *testing.T) {
 			st.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
 			held := liquidlane.CapacityReservations{}
 			held.Add(capacityID, big.NewInt(10_000_000)) // the whole advertised capacity
-			if !st.reserve("o1", held) {
+			if err := st.reserve("o1", held); err != nil {
 				t.Fatal("reserve")
 			}
 			st.markIncluded("o1", 100)
@@ -390,7 +391,7 @@ func TestConfirmedSpendSurvivesFilledStatusForOlderSnapshots(t *testing.T) {
 	st.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
 	held := liquidlane.CapacityReservations{}
 	held.Add(capacityID, big.NewInt(7))
-	if !st.reserve("o1", held) {
+	if err := st.reserve("o1", held); err != nil {
 		t.Fatal("reserve")
 	}
 	st.markIncluded("o1", 100)
@@ -438,7 +439,7 @@ func TestFillPlanningSkipsConfirmedSpendFreshStateReflects(t *testing.T) {
 			st.upsertQueued(queuedOrder{OrderID: "prior", QuoteID: "q0"})
 			spent := liquidlane.CapacityReservations{}
 			spent.Add(vltFillCapacity(), big.NewInt(900000))
-			if !st.reserve("prior", spent) {
+			if err := st.reserve("prior", spent); err != nil {
 				t.Fatal("reserve prior")
 			}
 			st.markIncluded("prior", 100)

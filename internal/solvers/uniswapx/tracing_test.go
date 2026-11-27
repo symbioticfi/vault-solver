@@ -108,6 +108,7 @@ func TestQuoteServerTracingDeclines(t *testing.T) {
 	strategy := &quoteTestStrategy{}
 	solver := newTracingQuoteSolver(t, tokenIn, strategy)
 	request := validQuoteRequest(tokenIn, tokenOut)
+	request.TokenOutChainID = solver.chainID + 1
 
 	if response := postQuote(t, solver.newQuoteHTTPServer(t.Context()).Handler, request); response.Code != http.StatusNoContent {
 		t.Fatalf("declined quote = %d, want 204", response.Code)
@@ -117,9 +118,8 @@ func TestQuoteServerTracingDeclines(t *testing.T) {
 	if span.Status().Code == codes.Error {
 		t.Fatalf("a declined quote must not be an error span: %v", span.Status())
 	}
-	events := span.Events()
-	if len(events) != 1 || events[0].Name != "declined" {
-		t.Fatalf("events = %v, want one declined event", events)
+	if reason, count := tracetest.EventAttr(span, "declined", "reason"); count != 1 || !strings.Contains(reason, "tokenOutChainId 2 is not chain 1") {
+		t.Fatalf("declined events = %d, reason %q, want the failed chain check", count, reason)
 	}
 	if _, ok := solver.links.Lookup(request.QuoteID); ok {
 		t.Fatal("a quote that was never served must not be remembered")

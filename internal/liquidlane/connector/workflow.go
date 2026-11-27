@@ -41,9 +41,8 @@ type State struct {
 	Account, Asset common.Address
 }
 
-// Request selects one connector swap: the whole AmountIn of TokenIn for exactly AmountOut of TokenOut.
-// A nil AmountOut takes the connector's own payment for AmountIn: its oracle amount after the
-// signed discount, read at the pinned recipe block.
+// Request selects a swap for the connector's payment at AmountIn. Preparation
+// reads the oracle amount at the recipe block and applies the signed discount.
 type Request struct {
 	Venue      common.Address // LiquidLaneConnector
 	Executor   common.Address // RecipeExecutor funding the swap
@@ -52,7 +51,6 @@ type Request struct {
 	TokenIn    common.Address
 	AmountIn   *big.Int
 	TokenOut   common.Address
-	AmountOut  *big.Int
 }
 
 // Prepared is an authenticated recipe execution awaiting its outer settlement envelope.
@@ -205,18 +203,6 @@ func (w *Workflow) prepareLeg(ctx context.Context, request Request, member recip
 	if err != nil {
 		return Prepared{}, errors.Errorf("connector remainingAssets decode: %w", err)
 	}
-	covers := func(amount *big.Int) error {
-		if remaining.Cmp(amount) < 0 || request.MaxAssets.Cmp(amount) < 0 {
-			return ErrInsufficientCapacity
-		}
-		return nil
-	}
-	amountOut := request.AmountOut
-	if amountOut != nil {
-		if err := covers(amountOut); err != nil {
-			return Prepared{}, err
-		}
-	}
 	if state.Asset != request.TokenOut {
 		return Prepared{}, errors.New("connector outputAsset differs from awarded output")
 	}
@@ -232,14 +218,17 @@ func (w *Workflow) prepareLeg(ctx context.Context, request Request, member recip
 	if err != nil {
 		return Prepared{}, err
 	}
-	if amountOut == nil {
-		amountOut, err = w.payment(ctx, request, terms, block)
-		if err != nil {
-			return Prepared{}, err
-		}
-		if err := covers(amountOut); err != nil {
-			return Prepared{}, err
-		}
+	amountOut, err := w.payment(ctx, request, terms, block)
+	if err != nil {
+		return Prepared{}, err
+	}
+	if remaining.Cmp(amountOut) < 0 {
+		return Prepared{}, errors.Errorf("%w: connector %s remainingAssets %s below required output %s",
+			ErrInsufficientCapacity, request.Venue.Hex(), remaining, amountOut)
+	}
+	if request.MaxAssets.Cmp(amountOut) < 0 {
+		return Prepared{}, errors.Errorf("%w: connector %s maxAssets %s below required output %s",
+			ErrInsufficientCapacity, request.Venue.Hex(), request.MaxAssets, amountOut)
 	}
 	assembled, err := assembleRoute(recipe, tree, request.Venue, request.TokenIn, w.Filler, request.AmountIn, amountOut, terms.Swap, terms.Signature)
 	if err != nil {

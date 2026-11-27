@@ -5,6 +5,7 @@ package defaultstrategy
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"maps"
 	"math/big"
 	"slices"
@@ -15,6 +16,7 @@ import (
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/morpho"
 	"github.com/symbioticfi/vault-solver/internal/observability"
+	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
 const (
@@ -66,41 +68,44 @@ type pricedBundle struct {
 
 // Legs sharing collateral share the adapter's getMaxAssets pool, so gross selection caps cumulative
 // expected loan output per collateral against cached adapter liquidity and the settlement gas limit.
-func (e bundleEngine) selectBundleWithGas(scored []scoredLeg, laneState *liquidLaneState, gasLimit uint64, feedCount int) (chosenBundle, string) {
+func (e bundleEngine) selectBundleWithGas(scored []scoredLeg, laneState *liquidLaneState, gasLimit uint64, feedCount int) (chosenBundle, bidSkip) {
 	if len(scored) == 0 {
-		return chosenBundle{}, skipNoLegs
+		return chosenBundle{}, bidSkip{code: skipNoLegs, detail: types.Text("no sized legs to bundle")}
 	}
-	best, ok := e.searchBundle(scored, laneState, gasLimit, feedCount, func(b chosenBundle) *big.Int {
+	best, none := e.searchBundle(scored, laneState, gasLimit, feedCount, func(b chosenBundle) *big.Int {
 		return new(big.Int).Set(b.grossLoan)
 	})
-	if !ok {
-		return chosenBundle{}, skipNoLegs
+	if none != "" {
+		return chosenBundle{}, skipf(skipNoLegs, "no bundle from %d sized legs: %s", len(scored), none)
 	}
-	return best.bundle, ""
+	return best.bundle, bidSkip{}
 }
 
 // selectNetBundle maximizes bounded after-cost net while preserving deterministic tie-breaks and the shared
 // collateral budget. A lower-gross subset can beat a gross-best subset once gas and the bid are priced in.
-func (e bundleEngine) selectNetBundle(scored []scoredLeg, rate *big.Int, laneState *liquidLaneState, gasPrice *big.Int, gasLimit uint64, feedCount int) (chosenBundle, string) {
+func (e bundleEngine) selectNetBundle(scored []scoredLeg, rate *big.Int, laneState *liquidLaneState, gasPrice *big.Int, gasLimit uint64, feedCount int) (chosenBundle, bidSkip) {
 	if len(scored) == 0 {
-		return chosenBundle{}, skipNoLegs
+		return chosenBundle{}, bidSkip{code: skipNoLegs, detail: types.Text("no sized legs to bundle")}
 	}
 	if rate == nil || rate.Sign() <= 0 {
-		return chosenBundle{}, skipGasUnprofitable
+		return chosenBundle{}, skipf(skipGasUnprofitable, "loan/native gas rate %v is not positive", rate)
 	}
-	best, ok := e.searchBundle(scored, laneState, gasLimit, feedCount, func(b chosenBundle) *big.Int {
+	best, none := e.searchBundle(scored, laneState, gasLimit, feedCount, func(b chosenBundle) *big.Int {
 		return e.bundleNetNativeForFeeds(b, rate, laneState, gasPrice, feedCount)
 	})
-	if !ok {
-		return chosenBundle{}, skipGasUnprofitable
+	if none != "" {
+		// The cause is structural (no leg fits); the code stays gas_unprofitable so the metric keeps its meaning.
+		return chosenBundle{}, skipf(skipGasUnprofitable, "structural, not gas: no bundle fits (no legs) from %d sized legs: %s",
+			len(scored), none)
 	}
 	bidNative := e.bundleBidNative(best.bundle, rate)
 	minNative := e.minBundleProfitNative(bidNative)
 	bestNet := e.bundleNetNativeForFeeds(best.bundle, rate, laneState, gasPrice, feedCount)
 	if bestNet.Cmp(minNative) < 0 {
-		return best.bundle, skipGasUnprofitable
+		return best.bundle, skipf(skipGasUnprofitable, "best bundle net %v wei is below minimum %v wei (bid %v wei, %d legs)",
+			bestNet, minNative, bidNative, len(best.bundle.legs))
 	}
-	return best.bundle, ""
+	return best.bundle, bidSkip{}
 }
 
 type bundleSearchState struct {
@@ -122,10 +127,12 @@ type replayedScoredLeg struct {
 	market   bundleMarketState
 }
 
-func (e bundleEngine) searchBundle(scored []scoredLeg, laneState *liquidLaneState, gasLimit uint64, feedCount int, scoreFn func(chosenBundle) *big.Int) (bundleSearchState, bool) {
+// searchBundle returns the best bundle, or why it found none.
+func (e bundleEngine) searchBundle(scored []scoredLeg, laneState *liquidLaneState, gasLimit uint64, feedCount int, scoreFn func(chosenBundle) *big.Int) (bundleSearchState, string) {
 	maxDepth := bundleSearchDepth(gasLimit, feedCount)
 	if maxDepth == 0 {
-		return bundleSearchState{}, false
+		return bundleSearchState{}, fmt.Sprintf("usable gas limit %d is below the %d units one leg needs with %d feeds",
+			usableGasLimit(gasLimit), firstLegGasUnits(feedCount), feedCount)
 	}
 	group := sortedScoredLegs(scored)
 	if len(group) > maxBundleSearchCandidates {
@@ -154,6 +161,10 @@ func (e bundleEngine) searchBundle(scored []scoredLeg, laneState *liquidLaneStat
 	}
 	beam := []bundleSearchState{start}
 	best := start
+	var (
+		dropped rejectTally // depth-0 drops; they explain an empty result
+		why     legRejection
+	)
 	for depth := 0; depth < maxDepth && depth < len(group); depth++ {
 		nextBeam := make([]bundleSearchState, 0, min(len(group), netBundleBeamWidth))
 		for _, state := range beam {
@@ -161,11 +172,22 @@ func (e bundleEngine) searchBundle(scored []scoredLeg, laneState *liquidLaneStat
 				if state.used[i] {
 					continue
 				}
-				trial, ok := e.extendBundleState(state, sl, i)
-				if !ok {
-					continue
+				trial, ok := e.extendBundleState(state, sl, i, &why)
+				if ok && !fitsGasLimit(legHints(trial.bundle.legs), laneState, gasLimit, feedCount) {
+					ok = false
+					if depth == 0 {
+						why = legRejection{check: checkGasLimit, n: int64(usableGasLimit(gasLimit))}
+					}
 				}
-				if !fitsGasLimit(legHints(trial.bundle.legs), laneState, gasLimit, feedCount) {
+				if !ok {
+					if depth == 0 {
+						// At depth 0 the replay sizes against the leg's own snapshot state.
+						if why.check == checkHealthy && dropped.needsExample(checkHealthy) {
+							src := sl.source
+							why.healthyValues(src.cand, src.price, src.cand.Market.State.TotalBorrowAssets)
+						}
+						dropped.add(sl.MarketId, sl.Borrower, &why)
+					}
 					continue
 				}
 				trial.score = scoreFn(trial.bundle)
@@ -180,21 +202,34 @@ func (e bundleEngine) searchBundle(scored []scoredLeg, laneState *liquidLaneStat
 		}
 		beam = nextBeam
 	}
-	return best, len(best.bundle.legs) > 0
+	if len(best.bundle.legs) == 0 {
+		return best, dropped.String()
+	}
+	return best, ""
+}
+
+func firstLegGasUnits(feedCount int) uint64 {
+	return fixedSettlementGasUnits(feedCount) + liquidlanegas.UnitsForRouteAt(liquidlanegas.RouteAcquire, true)
 }
 
 func bundleSearchDepth(gasLimit uint64, feedCount int) int {
 	usable := usableGasLimit(gasLimit)
-	fixed := fixedSettlementGasUnits(feedCount) + liquidlanegas.UnitsForRouteAt(liquidlanegas.RouteAcquire, true)
+	fixed := firstLegGasUnits(feedCount)
 	if usable < fixed {
 		return 0
 	}
 	return 1 + int((usable-fixed)/liquidlanegas.UnitsForRouteAt(liquidlanegas.RouteAcquire, false))
 }
 
-func (e bundleEngine) extendBundleState(state bundleSearchState, sl scoredLeg, idx int) (bundleSearchState, bool) {
-	next, ok := e.replayScoredLeg(sl, state.markets)
-	if !ok || !fitsCollateralBudget(state.consumed, next.scored) {
+// extendBundleState adds sl to state; on false it writes the failed check to why.
+func (e bundleEngine) extendBundleState(state bundleSearchState, sl scoredLeg, idx int, why *legRejection) (bundleSearchState, bool) {
+	next, ok := e.replayScoredLeg(sl, state.markets, why)
+	if !ok {
+		return bundleSearchState{}, false
+	}
+	if !fitsCollateralBudget(state.consumed, next.scored) {
+		*why = legRejection{check: checkBudget,
+			v: [6]*big.Int{state.consumed[next.scored.collateral], next.scored.settlementLoanOut, next.scored.maxAssets}}
 		return bundleSearchState{}, false
 	}
 	trial := bundleSearchState{
@@ -211,12 +246,13 @@ func (e bundleEngine) extendBundleState(state bundleSearchState, sl scoredLeg, i
 	return trial, true
 }
 
-func (e bundleEngine) replayScoredLeg(sl scoredLeg, markets map[common.Hash]bundleMarketState) (replayedScoredLeg, bool) {
+func (e bundleEngine) replayScoredLeg(sl scoredLeg, markets map[common.Hash]bundleMarketState, why *legRejection) (replayedScoredLeg, bool) {
 	if !sl.replay {
 		return replayedScoredLeg{scored: sl}, true
 	}
 	id := sl.source.cand.MarketID
 	if id == (common.Hash{}) {
+		*why = legRejection{check: checkNoMarketID, addr: sl.source.cand.Borrower}
 		return replayedScoredLeg{}, false
 	}
 	ms, ok := markets[id]
@@ -230,12 +266,13 @@ func (e bundleEngine) replayScoredLeg(sl scoredLeg, markets map[common.Hash]bund
 	cand := sl.source.cand
 	cand.Market = ms.info
 	cand.Position = pos
-	sized, ok := sizeLeg(cand, sl.source.price, sl.source.quote, ms.info.State.TotalBorrowAssets, e.cfg.Sizing)
+	sized, ok := sizeLeg(cand, sl.source.price, sl.source.quote, ms.info.State.TotalBorrowAssets, e.cfg.Sizing, why)
 	if !ok {
 		return replayedScoredLeg{}, false
 	}
 	replay, ok := morpho.ApplySeizeLiquidation(ms.info.State, pos, sized.leg.MaxSeizeAssets, sl.source.price)
 	if !ok {
+		*why = legRejection{check: checkSeizeReplay, v: [6]*big.Int{sized.leg.MaxSeizeAssets, sl.source.price}}
 		return replayedScoredLeg{}, false
 	}
 	nextMarket := cloneBundleMarketState(ms)

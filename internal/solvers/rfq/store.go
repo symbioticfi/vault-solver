@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/parse"
@@ -270,18 +271,18 @@ func (s *store) markStatusLocked(rec *orderRecord, status orderStatus, txHash co
 	rec.UpdatedAt = s.now()
 }
 
-// markExpired reports the first active-to-expired transition after retry exhaustion. The shared
-// store lock makes the event gate atomic with the status update; repeated polls cannot count it twice.
-func (s *store) markExpired(orderID string, txHash common.Hash, lastErr string) bool {
+// markExpired returns the recorded transaction hash and whether the order expired after retry
+// exhaustion. The store lock keeps the metric gate atomic with the status update.
+func (s *store) markExpired(orderID string, txHash common.Hash, lastErr string) (common.Hash, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec := s.orders[orderID]
 	if rec == nil || !rec.Status.active() {
-		return false
+		return txHash, false
 	}
 	exhausted := rec.NonceRetryExhausted
 	s.markStatusLocked(rec, statusExpired, txHash, lastErr)
-	return exhausted
+	return rec.TxHash, exhausted
 }
 
 // markNonceRetryExhausted retires resubmission, while keeping backend settlement observation until
@@ -388,14 +389,21 @@ func (s *store) scheduleEstimateRetry(orderID string, limit int, retryAt time.Ti
 
 // reserve replaces an active order's reservation. It refuses an order that has already left the
 // active set, so a plan finishing after a terminal transition cannot leak capacity.
-func (s *store) reserve(orderID string, reservations liquidlane.CapacityReservations) bool {
+func (s *store) reserve(orderID string, reservations liquidlane.CapacityReservations) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec, ok := s.orders[orderID]
-	if !ok || !rec.Status.active() || rec.Status == statusNonceUsed {
-		return false
+	switch {
+	case !ok:
+		return errors.New("order is no longer tracked")
+	case !rec.Status.active():
+		return errors.Errorf("order status %s is not active", rec.Status)
+	case rec.Status == statusNonceUsed:
+		return errors.New("order nonce is already used")
+	case !s.reservations.Set(orderID, reservations):
+		return errors.Errorf("reservations %v are not valid", reservations)
 	}
-	return s.reservations.Set(orderID, reservations)
+	return nil
 }
 
 // reserved reports whether an order already holds a reservation.

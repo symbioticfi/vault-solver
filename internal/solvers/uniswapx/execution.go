@@ -2,6 +2,7 @@ package uniswapx
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"time"
 
@@ -73,11 +74,12 @@ func (s *Solver) fillLoop(
 				s.retry(order.Hash, time.Now(), false)
 				continue
 			}
-			if !s.fillPath().laneAvailable() {
+			if reason := s.fillPath().laneBlockReason(); reason != "" {
 				s.endFillPlanning()
 				s.retry(order.Hash, time.Now(), false)
 				observability.Log(orderCtx).V(1).Info(
-					"order fill deferred while transaction nonce lane is paused",
+					"order fill deferred by transaction lane",
+					"reason", reason,
 					"source", order.Source,
 					"orderHash", order.Hash.Hex(),
 					"quoteId", order.QuoteID,
@@ -110,7 +112,7 @@ func (s *Solver) fillLoop(
 				if errors.Is(err, errOrderNotFillable) {
 					s.observeFillOutcome(fillOutcomeDeclined)
 					observability.Log(orderCtx).V(1).Info("order not fillable yet", "source", order.Source,
-						"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID)
+						"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "reason", err.Error())
 					continue
 				}
 				observability.Log(orderCtx).Error(
@@ -171,8 +173,12 @@ func (s *Solver) startFill(
 	if order.TokenOut == (common.Address{}) {
 		return nil, declineFill(ctx, "fill_skipped", "order has no output token")
 	}
-	if order.Deadline == 0 || int64(order.Deadline) <= now.Unix() {
-		return nil, declineFill(ctx, "fill_skipped", "order deadline has passed")
+	if order.Deadline == 0 {
+		return nil, declineFill(ctx, "fill_skipped", "order has no deadline")
+	}
+	if int64(order.Deadline) <= now.Unix() {
+		return nil, declineFill(ctx, "fill_skipped",
+			fmt.Sprintf("order deadline %d is not after chain time %d", order.Deadline, now.Unix()))
 	}
 	routeSet, discountErr := s.routesWithDiscounts(ctx, routes, now, advertisedRouteFilter{tokenIn: order.TokenIn, tokenOut: order.TokenOut})
 	decisionRoutes, listed := routeSet.routes, routeSet.listed
@@ -230,13 +236,18 @@ func (s *Solver) startFill(
 	}
 	prepared, err := s.prepareFill(ctx, order, fillInput, decisionRoutes, now, chainObservedAt, reservationRevision)
 	if err != nil {
+		if discountErr != nil {
+			err = errors.Errorf("%w (discount route refresh failed: %v)", err, discountErr)
+		}
 		return nil, err
 	}
 	plan, data, discountValidUntil := prepared.plan, prepared.data, prepared.validUntil
 	deadline := fillDeadline(order, discountValidUntil)
 	submissionDeadline, ok := liquidlane.SubmissionDeadline(deadline, now, chainObservedAt, time.Now())
 	if !ok {
-		return nil, declineFill(ctx, "fill_skipped", "fill execution deadline elapsed before submission")
+		return nil, declineFill(ctx, "fill_skipped", fmt.Sprintf(
+			"fill execution deadline %d elapsed before submission (chain time %d, observed %s ago)",
+			deadline.Unix(), now.Unix(), time.Since(chainObservedAt).Truncate(time.Millisecond)))
 	}
 	observability.Log(ctx).V(1).Info(
 		"order fill preflight succeeded",
@@ -313,16 +324,29 @@ func (s *Solver) orderObsolete(order *resolvedOrder) func(context.Context) (bool
 // pairing the event and sentinel keeps unfillable plans out of error statistics.
 func declineFill(ctx context.Context, decision, reason string) error {
 	observability.Decline(ctx, decision, reason)
-	return errOrderNotFillable
+	return errors.Errorf("%w: %s", errOrderNotFillable, reason)
 }
 
-// decideFill runs the strategy as the uniswapx.fill.plan stage.
+// decideFill runs the strategy as the uniswapx.fill.plan stage. A strategy decline returns no plan,
+// a reason naming the failed check and a nil error.
 func (s *Solver) decideFill(
 	ctx context.Context, input types.FillInput,
-) (plan *types.FillPlan, err error) {
+) (plan *types.FillPlan, declined string, err error) {
 	ctx, end := tracer.Start(ctx, "uniswapx.fill.plan", observability.AttrStrategy.String(s.cfg.Strategy.Name))
 	defer func() { end(err) }()
-	return s.strategy.DecideFill(ctx, input)
+	plan, err = s.strategy.DecideFill(ctx, input)
+	switch {
+	case errors.Is(err, types.ErrFillDeclined):
+		declined, err = err.Error(), nil
+	case err != nil:
+		return nil, "", err
+	case plan == nil || len(plan.Routes) == 0:
+		declined = "strategy returned an empty fill plan"
+	default:
+		return plan, "", nil
+	}
+	observability.Decline(ctx, "fill_declined", declined)
+	return nil, declined, nil
 }
 
 // submitFill hands the fill to the shared txmanager as the uniswapx.fill.submit stage. The result is
@@ -338,7 +362,7 @@ func (s *Solver) submitFill(
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		return nil, errors.New("transaction submission was not accepted")
+		return nil, errors.New("transaction manager did not accept the fill (stopped or deadline reached before admission)")
 	}
 	return result, nil
 }
@@ -547,7 +571,7 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 		observability.Log(ctx).Info(
 			"order fill obsolete: order no longer fillable",
 			"source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
-			"tx", result.Hash.Hex(), "outcome", outcome,
+			"tx", result.Hash.Hex(), "outcome", outcome, "reason", errorReason(result.Err),
 		)
 		return
 	}
