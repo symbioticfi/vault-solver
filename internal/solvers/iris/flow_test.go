@@ -112,13 +112,13 @@ func TestIndicativeQuoteUsesEachMarketsLimits(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			chain := &fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(1_000e6), head: &types.Header{Number: big.NewInt(1)}}
+			chain := &fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(30e6), head: &types.Header{Number: big.NewInt(1)}}
 			s, r := indicativeSolver(t, chain)
 			tt.mutate(&r)
 			response, err := s.quote(context.Background(), r, true)
 			must(t, err)
 			equal(t, 1, chain.trips, "one round trip")
-			equal(t, "37500000", response.Bond)
+			equal(t, "30000000", response.Bond)
 			equal(t, tt.venue, response.VenueID)
 			equal(t, tt.rate, response.FixedRate)
 			equal(t, fixtureAccount.Hex(), response.Solver)
@@ -134,16 +134,16 @@ func TestIndicativeQuoteDeclines(t *testing.T) {
 		mutate func(*Solver, *request)
 		reason string
 	}{
-		{"allowance short", fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(37e6)}, nil, "insufficient_bond_allowance"},
-		{"allowance held by an open quote", fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(60e6)}, func(s *Solver, _ *request) {
+		{"allowance short", fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(29_999_999)}, nil, "insufficient_bond_allowance"},
+		{"allowance held by an open quote", fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(59_999_999)}, func(s *Solver, _ *request) {
 			s.reserve(Quote{DebtToken: fixtureUSDC, Bond: big.NewInt(30e6), Deadline: big.NewInt(time.Now().Add(time.Minute).Unix())})
 		}, "insufficient_bond_allowance"},
-		{"cash held by an open quote", fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(1e9), balance: big.NewInt(60e6)}, func(s *Solver, _ *request) {
+		{"cash held by an open quote", fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(1e9), balance: big.NewInt(59_999_999)}, func(s *Solver, _ *request) {
 			s.reserve(Quote{DebtToken: fixtureUSDC, Bond: big.NewInt(30e6), Deadline: big.NewInt(time.Now().Add(time.Minute).Unix())})
 		}, "insufficient_bond_balance"},
 		{"zero requirement", fakeChain{requirement: new(big.Int), allowance: big.NewInt(1e9)}, nil, "zero_bond_requirement"},
 		{"bond cap", fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(1e9)}, func(s *Solver, _ *request) {
-			s.cfg.Pricing.MaxBond = big.NewInt(37e6)
+			s.cfg.Pricing.MaxBond = big.NewInt(29_999_999)
 		}, "bond_above_limit"},
 		{"venue not allowed", fakeChain{}, func(_ *Solver, r *request) {
 			r.VenueBitmap = big.NewInt(0b100)

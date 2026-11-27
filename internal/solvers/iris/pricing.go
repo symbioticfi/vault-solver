@@ -52,7 +52,7 @@ func (p Pricing) rate(m Market) *big.Int {
 	return best
 }
 
-// padBond is the bond the offer recipe computes: the BLM requirement r plus a quarter, rounded
+// padBond reproduces legacy offer recipes: the BLM requirement r plus a quarter, rounded
 // up, as r + (r+3)/4.
 func padBond(requirement *big.Int) *big.Int {
 	quarter := new(big.Int).Add(requirement, big.NewInt(3))

@@ -749,16 +749,14 @@ func (f *forkEVM) quote(t *testing.T, r quoteRequest, q quoteResponse) blm.Quote
 	}
 }
 
-// expectedBond is the BLM requirement read independently, padded the way the UI recipe does:
-// r + ceil(r/4).
+// expectedBond reads the IRIS BLM requirement independently.
 func (f *forkEVM) expectedBond(r quoteRequest, q quoteResponse) *big.Int {
 	quote := f.quote(f.t, r, q)
 	quote.Bond, quote.Deadline, quote.Nonce = new(big.Int), new(big.Int), new(big.Int)
 	requirement, err := blmBinding.UnpackBondRequirement(f.call(forkBlm, blmBinding.PackBondRequirement(quote)))
 	must(f.t, err)
 	ok(f.t, requirement.Sign() > 0, "zero requirement")
-	quarter := new(big.Int).Add(requirement, big.NewInt(3))
-	return quarter.Div(quarter, big.NewInt(4)).Add(quarter, requirement)
+	return requirement
 }
 
 // digest is computed independently of the solver: go-ethereum EIP-712 over the Iris domain,
