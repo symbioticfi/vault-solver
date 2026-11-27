@@ -28,6 +28,7 @@ type Caller interface {
 // Offer is one advertised connector discount on a configured recipe route. MaxAssets is the
 // upstream funding capacity of Account in TokenOut, observed at BlockNumber.
 type Offer struct {
+	OracleBounds   liquidlane.OracleBounds
 	Venue          common.Address // LiquidLaneConnector
 	RecipeExecutor common.Address
 	Account        common.Address
@@ -154,6 +155,7 @@ func (o Offer) Read(ctx context.Context, chain Caller, chainID int64, block *big
 	item.RecipeExecutor, item.DiscountPrecision = o.RecipeExecutor, Precision
 	item.Discount, item.AdapterMinDiscount = new(big.Int).Set(o.Discount), minimum
 	item.Price = price
+	item.OracleBounds = o.OracleBounds
 	// Upstream funding stays as old as its observation, even though policy was read now.
 	item.BlockNumber = min(o.BlockNumber, block.Uint64())
 	return &item, nil

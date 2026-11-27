@@ -137,8 +137,13 @@ func (m listedSource) offer(ctx context.Context, decimals Decimals) (connector.O
 	if outDecimals != m.Listing.CollateralDecimals {
 		return connector.Offer{}, errors.Errorf("advertised output decimals %d differ from token decimals %d", m.Listing.CollateralDecimals, outDecimals)
 	}
+	bounds, err := liquidlane.ParseOracleBounds(m.Listing.MinOracleValue, m.Listing.MaxOracleValue)
+	if err != nil {
+		return connector.Offer{}, err
+	}
 	return connector.Offer{
-		Venue: m.Venue, RecipeExecutor: m.RecipeExecutor, Account: m.Account, TokenIn: m.tokenIn, TokenOut: m.tokenOut,
+		OracleBounds: bounds,
+		Venue:        m.Venue, RecipeExecutor: m.RecipeExecutor, Account: m.Account, TokenIn: m.tokenIn, TokenOut: m.tokenOut,
 		TokenInDecimals: inDecimals, TokenOutDecimals: outDecimals,
 		DiscountID: m.DiscountID, Discount: discount, MaxAssets: m.MaxAssets,
 		BlockNumber: m.Listing.BlockNumber, ValidUntil: time.Unix(m.Listing.Deadline, 0),

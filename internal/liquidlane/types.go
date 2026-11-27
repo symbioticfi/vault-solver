@@ -43,6 +43,7 @@ type Route struct {
 // Inventory is the current read-side liquidity/cap snapshot for one route.
 type Inventory struct {
 	Route
+	OracleBounds OracleBounds `json:"-"`
 
 	// A nonzero RecipeExecutor selects the connector surface; zero means native adapter.
 	RecipeExecutor    common.Address `json:"-"`
@@ -78,6 +79,7 @@ type QuoteCandidate struct {
 
 	Rate         *big.Int `json:"rate"`
 	MaxAmountIn  *big.Int `json:"maxAmountIn"`
+	MinAmountIn  *big.Int `json:"-"`
 	MaxAmountOut *big.Int `json:"maxAmountOut"`
 
 	DiscountID *common.Hash `json:"discountId"`
@@ -105,6 +107,9 @@ func (c QuoteCandidate) ExactPricing() bool {
 
 // AmountOutFor returns the candidate's output for amountIn, before its MaxAmountOut cap.
 func (c QuoteCandidate) AmountOutFor(amountIn *big.Int) *big.Int {
+	if c.MinAmountIn != nil && amountIn.Cmp(c.MinAmountIn) < 0 {
+		return new(big.Int)
+	}
 	if c.ExactPricing() {
 		return DiscountedAmountOutPrecision(amountIn, c.Price, c.Discount, c.Route.TokenInDecimals, c.Route.TokenOutDecimals, c.PricingPrecision())
 	}

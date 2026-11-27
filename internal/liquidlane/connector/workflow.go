@@ -248,7 +248,23 @@ func (w *Workflow) prepareLeg(ctx context.Context, request Request, member recip
 // payment mirrors the connector's discounted swap pricing: the oracle amount for the whole
 // input after the signed discount, floored like the contract.
 func (w *Workflow) payment(ctx context.Context, request Request, terms Terms, block *big.Int) (*big.Int, error) {
-	raw, err := w.Chain.CallContract(ctx, ethereum.CallMsg{To: &request.Venue, Data: connectorBinding.PackGetAmountOut(request.TokenIn, request.AmountIn)}, block)
+	gross, err := w.OracleValue(ctx, request.Venue, request.TokenIn, request.AmountIn, block)
+	if err != nil {
+		return nil, err
+	}
+	if !signedOracleBounds(terms.Swap.Discount.Nonce).Contains(gross) {
+		return nil, errors.New("connector swap is outside the signed discount tier")
+	}
+	amount := liquidlane.AmountOutAfterDiscountPrecision(gross, terms.Swap.Discount.Discount, Precision)
+	if amount.Sign() <= 0 {
+		return nil, errors.New("connector pays nothing for the input")
+	}
+	return amount, nil
+}
+
+// OracleValue reads the connector's undiscounted payment for an exact leg.
+func (w *Workflow) OracleValue(ctx context.Context, venue, token common.Address, amount, block *big.Int) (*big.Int, error) {
+	raw, err := w.Chain.CallContract(ctx, ethereum.CallMsg{To: &venue, Data: connectorBinding.PackGetAmountOut(token, amount)}, block)
 	if err != nil {
 		return nil, errors.Errorf("connector getAmountOut: %w", err)
 	}
@@ -256,11 +272,7 @@ func (w *Workflow) payment(ctx context.Context, request Request, terms Terms, bl
 	if err != nil {
 		return nil, errors.Errorf("connector getAmountOut decode: %w", err)
 	}
-	amount := liquidlane.AmountOutAfterDiscountPrecision(gross, terms.Swap.Discount.Discount, Precision)
-	if amount.Sign() <= 0 {
-		return nil, errors.New("connector pays nothing for the input")
-	}
-	return amount, nil
+	return gross, nil
 }
 
 // Validate admits the complete outer settlement transaction that carries every leg's Call.

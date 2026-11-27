@@ -13,6 +13,7 @@ import (
 	"github.com/go-errors/errors"
 	sdkparse "github.com/symbioticfi/merkle-executor/sdk/parse"
 	binding "github.com/symbioticfi/vault-solver/api/bindings/liquidlane/connector"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 )
@@ -79,4 +80,22 @@ func ParseDiscount(r *discounts.Resolved, id common.Hash, venue, token common.Ad
 	}
 	until := min(r.Discount.Deadline, r.ProtocolDeadline)
 	return Terms{out, sig, time.Unix(until, 0)}, nil
+}
+
+// The threshold is authenticated by the connector's existing signed nonce.
+func signedOracleBounds(nonce *big.Int) liquidlane.OracleBounds {
+	if nonce == nil {
+		return liquidlane.OracleBounds{}
+	}
+	tag := new(big.Int).Rsh(new(big.Int).Set(nonce), 192).Uint64()
+	mask := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1))
+	cutoff := new(big.Int).And(new(big.Int).Rsh(new(big.Int).Set(nonce), 64), mask)
+	switch tag {
+	case 0x4c4c544945523031: // LLTIER01
+		return liquidlane.OracleBounds{Max: cutoff}
+	case 0x4c4c544945523032: // LLTIER02
+		return liquidlane.OracleBounds{Min: cutoff}
+	default:
+		return liquidlane.OracleBounds{}
+	}
 }
