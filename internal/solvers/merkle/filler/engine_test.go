@@ -359,7 +359,7 @@ func TestRevertedFillNamesItsReplayedRevert(t *testing.T) {
 	}{
 		{"decoded", protocolio.Failure("call contract on read RPC", connectortest.Revert("InvalidDiscount()")), "replay of block 8 reverted with InvalidDiscount()"},
 		{"no payload", &connectortest.RevertError{}, "replay of block 8 reverted: execution reverted"},
-		{"replay passes", nil, "replay of block 8 did not revert (an earlier transaction in the block changed the state)"},
+		{"replay passes", nil, "replay of block 8 did not revert (state changed earlier in the block, or the tx ran out of gas)"},
 		{"replay fails", errors.New("connection refused"), "revert reason unavailable: replay of block 8 failed: connection refused"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

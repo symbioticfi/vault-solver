@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"reflect"
 	"strings"
 	"time"
 
@@ -16,7 +17,11 @@ import (
 	"github.com/go-errors/errors"
 )
 
-const maxRevertValueLen = 66
+const (
+	maxRevertValueLen = 66
+	// maxRevertArgsHexLen keeps the arguments of an undeclared error, e.g. a policy's amounts, bounded.
+	maxRevertArgsHexLen = 258
+)
 
 // plainReverts names Error(string) and Panic payloads for chain-level reads that know no contract ABI.
 var plainReverts = NewRevertDecoder()
@@ -86,7 +91,7 @@ func NewRevertDecoder(abis ...*abi.ABI) *RevertDecoder {
 }
 
 // Describe names a revert payload, e.g. `InvalidDiscount()`, `"ERC20: insufficient allowance"`,
-// `panic: arithmetic underflow or overflow (0x11)`, or the raw selector when no ABI declares it.
+// `panic: arithmetic underflow or overflow`, or the raw selector and arguments when no ABI declares it.
 func (d *RevertDecoder) Describe(data []byte) string {
 	switch {
 	case len(data) == 0:
@@ -109,19 +114,24 @@ func (d *RevertDecoder) Describe(data []byte) string {
 			return formatRevert(e, values)
 		}
 	}
-	return fmt.Sprintf("unknown error %s (%d bytes)", hexutil.Encode(data[:4]), len(data))
+	if len(data) == 4 {
+		return fmt.Sprintf("unknown error %s (4 bytes)", hexutil.Encode(data))
+	}
+	return fmt.Sprintf("unknown error %s (%d bytes, args %s)", hexutil.Encode(data[:4]), len(data),
+		truncate(hexutil.Encode(data[4:]), maxRevertArgsHexLen))
 }
 
-// Explain returns err with its decoded revert appended. A revert without a payload keeps the node's
-// message and is marked when that message names no reason; other errors are returned unchanged.
+// Explain returns err with its decoded revert appended. A node's revert reply without a payload or
+// reason is marked; other errors, including reverts a wrapper re-reported as text, are unchanged.
 func (d *RevertDecoder) Explain(err error) error {
 	data, reverted := RevertData(err)
+	var rpcErr rpc.Error
 	switch {
 	case !reverted:
 		return err
 	case len(data) > 0:
 		return errors.Errorf("%w (revert %s)", err, d.Describe(data))
-	case strings.Contains(err.Error(), "execution reverted: "):
+	case strings.Contains(err.Error(), "execution reverted: "), !errors.As(err, &rpcErr) || rpcErr.ErrorCode() != 3:
 		return err
 	default:
 		return errors.Errorf("%w (node returned no revert data)", err)
@@ -141,21 +151,26 @@ func formatRevert(e abi.Error, values []any) string {
 }
 
 func formatRevertValue(value any) string {
-	var s string
 	switch v := value.(type) {
 	case *big.Int:
-		s = v.String()
+		// At most 78 digits; a cut number would read as a different magnitude.
+		return v.String()
 	case common.Address:
-		s = v.Hex()
+		return v.Hex()
 	case []byte:
-		s = hexutil.Encode(v)
-	case [32]byte:
-		s = hexutil.Encode(v[:])
-	default:
-		s = fmt.Sprintf("%v", v)
+		return truncate(hexutil.Encode(v), maxRevertValueLen)
 	}
-	if len(s) > maxRevertValueLen {
-		s = s[:maxRevertValueLen] + "…"
+	if rv := reflect.ValueOf(value); rv.Kind() == reflect.Array && rv.Type().Elem().Kind() == reflect.Uint8 {
+		b := make([]byte, rv.Len())
+		reflect.Copy(reflect.ValueOf(b), rv)
+		return truncate(hexutil.Encode(b), maxRevertValueLen)
+	}
+	return truncate(fmt.Sprintf("%v", value), maxRevertValueLen)
+}
+
+func truncate(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
 	}
 	return s
 }
@@ -179,7 +194,7 @@ func (d *RevertDecoder) MinedRevert(ctx context.Context, replayer MinedCallRepla
 	defer cancel()
 	_, err := replayer.ReplayMinedCall(ctx, msg, block)
 	if err == nil {
-		return fmt.Sprintf("replay of block %s did not revert (an earlier transaction in the block changed the state)", block)
+		return fmt.Sprintf("replay of block %s did not revert (state changed earlier in the block, or the tx ran out of gas)", block)
 	}
 	data, reverted := RevertData(err)
 	if !reverted {

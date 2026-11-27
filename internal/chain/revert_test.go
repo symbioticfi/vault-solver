@@ -64,7 +64,7 @@ func TestRevertDecoderDescribe(t *testing.T) {
 			encodeRevert(t, "Panic(uint256)", abi.Arguments{{Type: uint256}}, big.NewInt(0x11)),
 			"panic: arithmetic underflow or overflow",
 		},
-		"unknown selector":      {hexutil.MustDecode("0xdeadbeef00"), "unknown error 0xdeadbeef (5 bytes)"},
+		"unknown selector":      {hexutil.MustDecode("0xdeadbeef00"), "unknown error 0xdeadbeef (5 bytes, args 0x00)"},
 		"undecodable arguments": {crypto.Keccak256([]byte("InsufficientBalance(uint256,uint256)"))[:4], "InsufficientBalance (undecodable arguments)"},
 		"short payload":         {[]byte{1, 2}, "malformed revert data 0x0102"},
 		"empty":                 {nil, "no revert data"},
@@ -101,6 +101,14 @@ func TestRevertDataAndExplain(t *testing.T) {
 	if _, reverted := RevertData(bare); !reverted || !errors.Is(decoder.Explain(bare), bare) {
 		t.Fatal("bare revert should be recognized and returned unchanged")
 	}
+	// Only the node's own reply proves the payload is missing; a wrapper may have dropped it.
+	if got := decoder.Explain(dataRPCError{}).Error(); got != "execution reverted (node returned no revert data)" {
+		t.Fatalf("payload-less node revert = %q", got)
+	}
+	textual := errors.New("tx 0x01 reverted on-chain (replay of block 9 reverted: execution reverted)")
+	if got := decoder.Explain(textual); !errors.Is(got, textual) {
+		t.Fatalf("re-reported revert = %q, want it unchanged", got)
+	}
 	transport := errors.New("context deadline exceeded")
 	if _, reverted := RevertData(transport); reverted || !errors.Is(decoder.Explain(transport), transport) {
 		t.Fatal("transport error must not be treated as a revert")
@@ -131,7 +139,7 @@ func TestMinedRevertReplaysTheMinedBlock(t *testing.T) {
 	}{
 		"decoded":        {dataRPCError{data: payload}, "replay of block 100 reverted with InvalidProtocolSignature()"},
 		"no payload":     {errors.New("execution reverted: Ownable: caller is not the owner"), "replay of block 100 reverted: execution reverted: Ownable: caller is not the owner"},
-		"did not revert": {nil, "replay of block 100 did not revert (an earlier transaction in the block changed the state)"},
+		"did not revert": {nil, "replay of block 100 did not revert (state changed earlier in the block, or the tx ran out of gas)"},
 		"read failed":    {errors.New("context deadline exceeded"), "revert reason unavailable: replay of block 100 failed: context deadline exceeded"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -146,5 +154,25 @@ func TestMinedRevertReplaysTheMinedBlock(t *testing.T) {
 	}
 	if got := decoder.MinedRevert(t.Context(), &fakeReplayer{}, ethereum.CallMsg{}, nil); got != "revert reason unavailable: unknown inclusion block" {
 		t.Fatalf("nil block = %q", got)
+	}
+}
+
+func TestFormatRevertValue(t *testing.T) {
+	t.Parallel()
+	maxUint := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+	for name, tc := range map[string]struct {
+		value any
+		want  string
+	}{
+		"bytes1":           {[1]byte{0x02}, "0x02"},
+		"bytes32":          {[32]byte{0xab}, "0xab" + strings.Repeat("0", 62)},
+		"max uint256":      {maxUint, maxUint.String()},
+		"multibyte string": {strings.Repeat("é", 70), strings.Repeat("é", maxRevertValueLen) + "…"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := formatRevertValue(tc.value); got != tc.want {
+				t.Fatalf("formatRevertValue = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

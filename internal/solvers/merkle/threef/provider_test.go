@@ -261,7 +261,7 @@ func TestEligibleKeepsPolicyRevertReason(t *testing.T) {
 		{"Error(string)", hexutil.Encode(append([]byte{0x08, 0xc3, 0x79, 0xa0}, reason...)), `"pair not allowed"`},
 		{"Panic(uint256)", "0x4e487b71" + strings.Repeat("0", 62) + "11", "panic: arithmetic underflow or overflow"},
 		{"account error", hexutil.Encode(accountbinding.NewMerkleAccount().GetABI().Errors["CapabilityNotAdded"].ID.Bytes()[:4]), "CapabilityNotAdded()"},
-		{"unknown error", "0xdeadbeef" + word, "unknown error 0xdeadbeef (36 bytes)"},
+		{"unknown error", "0xdeadbeef" + word, "unknown error 0xdeadbeef (36 bytes, args 0x" + word + ")"},
 		{"short payload", "0x1234", "malformed revert data 0x1234"},
 		{"not hex", "nope", "undecodable revert data nope"},
 		{"not a string", 7, "undecodable revert data 7"},

@@ -121,6 +121,10 @@ func (c *Client) ReadNonces(ctx context.Context, account common.Address) (latest
 // IsBlockOverrideUnsupported recognizes an endpoint that rejects the blockOverrides parameter of
 // eth_estimateGas or eth_call, as opposed to a call that reverts or a transport failure.
 func IsBlockOverrideUnsupported(err error) bool {
+	// A revert ran the call, so the overrides were accepted, whatever its reason text says.
+	if _, reverted := RevertData(err); reverted {
+		return false
+	}
 	var rpcErr rpc.Error
 	if errors.As(err, &rpcErr) && (rpcErr.ErrorCode() == -32602 || rpcErr.ErrorCode() == -32601) {
 		return true

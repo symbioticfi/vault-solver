@@ -33,7 +33,8 @@ func TestFillPreflightRevertNamesContractError(t *testing.T) {
 		want string
 	}{
 		{"custom error", revertRPCError{revertPayload("NotCaller()")}, "execution reverted (revert NotCaller())"},
-		{"no revert data", errors.New("execution reverted"), "execution reverted (node returned no revert data)"},
+		{"no revert data", revertRPCError{}, "execution reverted (node returned no revert data)"},
+		{"re-reported revert", errors.New("tx 0x01 reverted on-chain (replay of block 9 reverted: execution reverted)"), "(replay of block 9 reverted: execution reverted)"},
 		{"transport", errors.New("RPC unavailable"), "fill preflight failed: RPC unavailable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

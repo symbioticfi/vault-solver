@@ -68,7 +68,7 @@ func TestMinedRevertReplaysCallForReason(t *testing.T) {
 		{"custom error with decoder", &estimateRPCError{3, "execution reverted", nope}, chain.NewRevertDecoder(&parsed), "reverted with Nope())"},
 		{"custom error without decoder", &estimateRPCError{3, "execution reverted", nope}, nil, "reverted with unknown error " + nope + " (4 bytes))"},
 		{"no data", &estimateRPCError{3, "execution reverted", nil}, nil, "reverted: execution reverted)"},
-		{"not reproduced", nil, nil, "did not revert (an earlier transaction in the block changed the state))"},
+		{"not reproduced", nil, nil, "did not revert (state changed earlier in the block, or the tx ran out of gas))"},
 		{"replay failed", io.ErrUnexpectedEOF, nil, "failed: unexpected EOF)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
