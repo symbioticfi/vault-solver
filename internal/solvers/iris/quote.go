@@ -33,7 +33,7 @@ var (
 
 const (
 	debtInput, durationInput, fixedRateInput, deadlineInput = 3, 4, 5, 7
-	// bondWord is the Quote word the recipe computes; the solver reproduces it with padBond.
+	// bondWord is the Quote word the recipe computes; the solver quotes the BLM minimum.
 	bondWord = 13
 )
 

@@ -252,7 +252,7 @@ func newQuote(r request, m Market, rate *big.Int) Quote {
 
 // preflight reads every candidate's bond requirement, Iris allowance and cash at block in one
 // batch and returns, in rate order, the candidates whose bond the account can post, or the
-// cheapest candidate's decline. The bond is padded the way the recipe does. The allowance
+// cheapest candidate's decline. The bond is the BLM minimum. The allowance
 // must cover this bond and every outstanding one. The recipe tops cash up only to this bond,
 // so with quotes outstanding the cash must already cover them all; without any, the recipe's
 // own funding check decides, so simulate adds each candidate's sign execution, run from the
@@ -307,20 +307,19 @@ func (s *Solver) preflight(ctx context.Context, candidates []candidate, block *b
 	return passing, nil
 }
 
-// postable is the candidate's padded bond if the account can post it, from the reads at offset.
+// postable is the candidate's bond if the account can post it, from the reads at offset.
 func (s *Solver) postable(m Market, group *protocolio.ReadResults, offset int, now time.Time) (*big.Int, error) {
 	raw, err := group.At(offset).CallData()
 	if err != nil {
 		return nil, errors.Errorf("read bond requirement: %w", err)
 	}
-	requirement, err := blmBinding.UnpackBondRequirement(raw)
+	bond, err := blmBinding.UnpackBondRequirement(raw)
 	if err != nil {
 		return nil, errors.Errorf("decode bond requirement: %w", err)
 	}
-	if requirement.Sign() <= 0 {
+	if bond.Sign() <= 0 {
 		return nil, decline("zero_bond_requirement")
 	}
-	bond := padBond(requirement)
 	if limit := s.cfg.Pricing.MaxBond; limit != nil && bond.Cmp(limit) > 0 {
 		return nil, decline("bond_above_limit")
 	}

@@ -516,10 +516,10 @@ is returned, and Iris pulls the bond from the account at `take`.
   re-reads each executor's account, caller, recipe hash and block and the account root in
   one call, and rediscovers markets only when one changed.
 - `POST /quote` tries the markets whose caps admit the request cheapest first. Each is
-  priced from the `pricing` table (raised to the market's APR floor), its bond sized as the
-  recipe does (BLM requirement plus 25%, rounded up), and the curator's Iris allowance must
-  cover it and every quote still open. The solver simulates the recipe (which draws any bond
-  shortfall from the curator's funding venues) for the passing markets, sends the cheapest
+  priced from the `pricing` table (raised to the market's APR floor). The bond equals the BLM
+  requirement, and the Iris allowance must cover it and every quote still open. The solver
+  simulates the recipe (which draws any bond shortfall from the curator's funding venues) for
+  the passing markets, sends the cheapest
   that passes, and returns the quote once the receipt shows the digest is valid. The
   signature field is 65 zero bytes. One quote is signed at a time; others decline with
   `solver_busy`, as does a request while the transaction manager is busy. A signature that

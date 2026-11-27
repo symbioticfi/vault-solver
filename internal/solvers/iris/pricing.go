@@ -52,13 +52,6 @@ func (p Pricing) rate(m Market) *big.Int {
 	return best
 }
 
-// padBond is the bond the offer recipe computes: the BLM requirement r plus a quarter, rounded
-// up, as r + (r+3)/4.
-func padBond(requirement *big.Int) *big.Int {
-	quarter := new(big.Int).Add(requirement, big.NewInt(3))
-	return quarter.Quo(quarter, big.NewInt(4)).Add(quarter, requirement)
-}
-
 // schedule places the signature in the first slot the transaction can make and dates the
 // deadline from that slot, so the quote reaches the coordinator with about quoteTtl left.
 func (t Timing) schedule(now time.Time, headTimestamp uint64) (inclusion, deadline uint64) {

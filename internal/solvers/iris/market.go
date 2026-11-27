@@ -107,8 +107,8 @@ func decodeMarket(prepared recipes.PreparedRecipe, tree *recipes.Tree, iris comm
 			return Market{}, errors.Errorf("Quote word %d must be bound to input %d", w, i)
 		}
 	}
-	if bound[bondWord].Source != recipes.Result {
-		return Market{}, errors.New("recipe must compute the bond")
+	if !usesMinimumBond(recipe, bound[bondWord]) {
+		return Market{}, errors.New("recipe must use the Iris minimum bond")
 	}
 	fixed := make(map[int]*big.Int, len(fixedWords))
 	for _, w := range fixedWords {
@@ -137,6 +137,20 @@ func decodeMarket(prepared recipes.PreparedRecipe, tree *recipes.Tree, iris comm
 		return Market{}, err
 	}
 	return market, nil
+}
+
+// usesMinimumBond checks the BLM's floor(principal * ratio / WAD) at the quote binding.
+func usesMinimumBond(recipe recipes.Recipe, bond recipes.Value) bool {
+	step, ok := resultStep(recipe, bond)
+	if !ok || recipe.Steps[step][0] != recipes.MulDiv {
+		return false
+	}
+	values, err := recipes.Operands(recipe, uint(step))
+	if err != nil || len(values) != 3 || !isInput(values[0], debtInput) {
+		return false
+	}
+	divisor := values[2]
+	return divisor.Source == recipes.Literal && divisor.Value.Cmp(big.NewInt(1e18)) == 0
 }
 
 // signBindings requires the sign leaf to mask every Quote word except the type hash and the

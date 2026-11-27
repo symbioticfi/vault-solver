@@ -11,7 +11,7 @@ import pathlib
 import shutil
 import subprocess
 
-REVISION = "d6809886e5d278bb7cc15189a025cbd5f4650627"
+REVISION = "37223a5c13b7bc7cdfc9f0c8e4f5453c4cc7aafe"
 HERE = pathlib.Path(__file__).resolve().parent
 
 

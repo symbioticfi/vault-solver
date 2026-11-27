@@ -183,6 +183,16 @@ func TestDecodeMarketRejects(t *testing.T) {
 		{name: "bond from the keeper", iris: fixtureIris, chainID: 1, mutate: func(_ *uiFixture, p *recipes.PreparedRecipe) {
 			rebind(t, p, bondWord, recipes.Value{Source: recipes.Input, Value: big.NewInt(9)})
 		}},
+		{name: "bond with extra arithmetic", iris: fixtureIris, chainID: 1, mutate: func(_ *uiFixture, p *recipes.PreparedRecipe) {
+			// Point the bond binding at the recipe's addition instead of the BLM result.
+			for i, step := range p.Recipe.Steps {
+				if step[0] == recipes.Add {
+					rebind(t, p, bondWord, recipes.Value{Source: recipes.Result, Value: big.NewInt(int64(i))})
+					return
+				}
+			}
+			t.Fatal("fixture needs an addition step")
+		}},
 		{name: "collateral from the keeper", iris: fixtureIris, chainID: 1, mutate: func(_ *uiFixture, p *recipes.PreparedRecipe) {
 			rebind(t, p, 5, recipes.Value{Source: recipes.Input, Value: big.NewInt(0)})
 		}},
