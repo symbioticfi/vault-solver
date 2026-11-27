@@ -217,9 +217,7 @@ func (e *Engine) Poll(ctx context.Context) (outcome *Outcome, err error) {
 		return nil, err
 	}
 	block := result.Execution.BlockNumber.Uint64()
-	var revert string
 	if result.Reverted {
-		revert = e.replay(ctx, intent, block)
 		e.Spends.Release(intent.OrderID)
 	} else {
 		spend := intent.Spend
@@ -228,12 +226,15 @@ func (e *Engine) Poll(ctx context.Context) (outcome *Outcome, err error) {
 			return nil, err
 		}
 	}
+	e.intent.CompareAndSwap(intent, nil)
+	// The lane is free before the replay, so diagnosing a revert never delays the next fill.
+	var revert string
 	log := observability.Log(ctx)
 	if result.Reverted {
+		revert = e.replay(ctx, intent, block)
 		log = log.WithValues("revert", revert)
 	}
 	log.Info("fill transaction finalized", "orderId", intent.OrderID, "tx", result.Hash.Hex(), "reverted", result.Reverted)
-	e.intent.CompareAndSwap(intent, nil)
 	return &Outcome{OrderID: intent.OrderID, Hash: result.Hash, Block: block, Reverted: result.Reverted, Revert: revert}, nil
 }
 

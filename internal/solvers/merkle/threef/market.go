@@ -21,11 +21,15 @@ import (
 // ABIs declare no custom errors.
 var reverts = vschain.RevertDecoderFor(&accountbinding.MerkleAccountMetaData, &recipeexecutor.RecipeExecutorMetaData)
 
-// readFailure names a failed read. A revert is decoded; any other error is dropped because RPC
-// transport errors can carry the endpoint URL and its key.
+// readFailure names a failed read. A revert is decoded and cancellation is kept so shutdown is not
+// reported as a failure; any other error is dropped because RPC transport errors can carry the
+// endpoint URL and its key.
 func readFailure(what string, err error) error {
 	if data, reverted := vschain.RevertData(err); reverted {
 		return errors.Errorf("3f %s reverted: %s", what, reverts.Describe(data))
+	}
+	if errors.Is(err, context.Canceled) {
+		return errors.Errorf("3f %s failed: %w", what, context.Canceled)
 	}
 	return errors.Errorf("3f %s failed", what)
 }

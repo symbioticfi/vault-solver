@@ -3,6 +3,7 @@ package redstoneoev
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -23,6 +24,9 @@ import (
 var revertDecoder = liquidlane.RevertDecoder(
 	&executor.RedStoneExecutorMetaData, &callback.SymbioticOevSolverMetaData, &morphobinding.MorphoMetaData,
 )
+
+// settlementReplayTimeout bounds a failed-settlement replay: two reads plus the mined-call replay.
+const settlementReplayTimeout = 15 * time.Second
 
 // settlementReplayer is the slice of the chain client a failed-settlement replay needs.
 type settlementReplayer interface {
@@ -49,10 +53,13 @@ func (s *Solver) replayFailedSettlement(ctx context.Context, rawHash string) {
 	}
 	s.replays.Go(func() {
 		defer s.replayBusy.Store(false)
-		replayCtx, end := tracer.Start(ctx, "oev.liquidation.replay", observability.AttrTxHash.String(hash.Hex()))
-		reason, err := settlementRevert(replayCtx, s.replayer, ethtypes.LatestSignerForChainID(s.chainID), hash)
+		// Detached from the WS connection, whose reconnect or rotation would cut the replay short.
+		replayCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), settlementReplayTimeout)
+		defer cancel()
+		replayCtx, end := tracer.Start(replayCtx, "oev.liquidation.replay", observability.AttrTxHash.String(hash.Hex()))
 		// The replay is diagnostic: its own failure is logged, never a span error or a page.
-		end(nil)
+		defer end(nil)
+		reason, err := settlementRevert(replayCtx, s.replayer, ethtypes.LatestSignerForChainID(s.chainID), hash)
 		log := observability.Log(replayCtx)
 		if err != nil {
 			log.Info("liquidation-failure-replay", "txHash", hash.Hex(),

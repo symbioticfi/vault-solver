@@ -48,7 +48,7 @@ func validateAPIConfig(cfg apiConfig) error {
 		return err
 	}
 	if !envName.MatchString(cfg.APIKeyEnv) {
-		return errors.Errorf("3f apiKeyEnv %q is not an environment variable name", cfg.APIKeyEnv)
+		return errors.New("3f apiKeyEnv is not an environment variable name")
 	}
 	if cfg.Broker == (common.Address{}) {
 		return errors.New("3f broker must be a nonzero address")
