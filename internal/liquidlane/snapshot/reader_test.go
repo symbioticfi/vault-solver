@@ -19,6 +19,7 @@ type fakeLiquidReader struct {
 	gas        *liquidlanegas.Snapshot
 	gasReads   int
 	fillDrops  []liquidlane.Drop
+	authDrops  []liquidlane.Drop
 }
 
 func (f *fakeLiquidReader) ResolveRoutes(context.Context, []common.Address) ([]liquidlane.Route, error) {
@@ -64,11 +65,16 @@ func (f *fakeLiquidReader) ReadFillQuotes(
 }
 
 func (f *fakeLiquidReader) FilterAuthorizedRoutes(
-	context.Context,
-	[]liquidlane.Route,
-	common.Address,
-	...liquidlane.DropTrace,
+	_ context.Context,
+	_ []liquidlane.Route,
+	_ common.Address,
+	traces ...liquidlane.DropTrace,
 ) ([]liquidlane.Route, error) {
+	for _, d := range f.authDrops {
+		for _, trace := range traces {
+			trace(d)
+		}
+	}
 	return f.authorized, nil
 }
 
@@ -164,12 +170,14 @@ func TestReaderBuildsQuoteAndFillSnapshots(t *testing.T) {
 func TestFillCollectsDropsAndForwardsThem(t *testing.T) {
 	t.Parallel()
 	drop := liquidlane.Drop{Adapter: common.HexToAddress("0xa"), Reason: "getAmountOut reverted: \"stale price\""}
-	liquid := &fakeLiquidReader{fillDrops: []liquidlane.Drop{drop}}
+	// An unauthorized route still prices through discount quotes, so it is traced but is no fill drop.
+	unauthorized := liquidlane.Drop{Adapter: common.HexToAddress("0xb"), Reason: "filler is not marketMaker"}
+	liquid := &fakeLiquidReader{fillDrops: []liquidlane.Drop{drop}, authDrops: []liquidlane.Drop{unauthorized}}
 	reader := newReader(liquid, nil)
 	var forwarded []liquidlane.Drop
 	fill, err := reader.Fill(t.Context(), nil, common.Address{}, common.Address{}, big.NewInt(1),
 		func(d liquidlane.Drop) { forwarded = append(forwarded, d) })
-	if err != nil || len(fill.Drops) != 1 || fill.Drops[0] != drop || len(forwarded) != 1 {
+	if err != nil || len(fill.Drops) != 1 || fill.Drops[0] != drop || len(forwarded) != 2 {
 		t.Fatalf("fill drops = %+v forwarded = %+v err = %v", fill.Drops, forwarded, err)
 	}
 	// Without a caller trace the drops are still collected (and logged at V(1)).

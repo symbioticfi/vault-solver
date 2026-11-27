@@ -70,10 +70,12 @@ func SummarizeDrops(drops []Drop) string {
 	return fmt.Sprintf("%d dropped reads: %s", len(drops), strings.Join(parts, "; "))
 }
 
-// collectDrops keeps drops for an error that must say why a read came back incomplete.
-func collectDrops() (DropTrace, func() string) {
+// collectDrops keeps drops for an error that must say why a read came back incomplete. Each is also
+// logged at V(1), since some drops only degrade the view and reach no error.
+func collectDrops(ctx context.Context) (DropTrace, func() string) {
 	var drops []string
-	return func(d Drop) { drops = append(drops, d.String()) }, func() string {
+	logDrop := LogDrops(ctx)
+	return func(d Drop) { drops = append(drops, d.String()); logDrop(d) }, func() string {
 		if len(drops) == 0 {
 			return "no drop recorded"
 		}

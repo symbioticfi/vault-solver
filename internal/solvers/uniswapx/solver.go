@@ -98,11 +98,7 @@ type chainReader interface {
 	resolveRoutes(ctx context.Context, adapters []common.Address) ([]liquidlane.Route, error)
 	validateExecutorCode(ctx context.Context, executor common.Address) error
 	validateExecutorCaller(ctx context.Context, executor, caller common.Address) error
-	unauthorizedAdapters(
-		ctx context.Context,
-		executor common.Address,
-		routes []liquidlane.Route,
-	) ([]common.Address, error)
+	validateDirectAuthorization(ctx context.Context, executor common.Address, routes []liquidlane.Route) error
 	validateGasOracles(ctx context.Context, routes []liquidlane.Route) error
 	validateGasTokens(routes []liquidlane.Route) error
 	quoteSnapshot(ctx context.Context, routes []liquidlane.Route, executor common.Address) (snapshot, error)
@@ -279,18 +275,8 @@ func (s *Solver) Run(ctx context.Context) error {
 		return startupErr
 	}
 	if s.cfg.restrictsToAdapters() {
-		unauthorized, err := s.reader.unauthorizedAdapters(ctx, s.cfg.Executor, routes)
-		if err != nil {
+		if err := s.reader.validateDirectAuthorization(ctx, s.cfg.Executor, routes); err != nil {
 			startupErr := errors.Errorf("validate adapters: %w", err)
-			observability.Log(ctx).Error(startupErr, "adapter validation failed",
-				"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
-			return startupErr
-		}
-		if len(unauthorized) > 0 {
-			startupErr := errors.Errorf(
-				"validate adapters: executor %s is not authorized as direct filler for configured adapters: %v",
-				s.cfg.Executor.Hex(), unauthorized,
-			)
 			observability.Log(ctx).Error(startupErr, "adapter validation failed",
 				"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
 			return startupErr

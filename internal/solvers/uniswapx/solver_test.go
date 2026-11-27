@@ -82,14 +82,17 @@ func (r *startupChainReader) validateExecutorCaller(
 	return r.callerErr
 }
 
-func (r *startupChainReader) unauthorizedAdapters(
+func (r *startupChainReader) validateDirectAuthorization(
 	_ context.Context,
 	executor common.Address,
 	_ []liquidlane.Route,
-) ([]common.Address, error) {
+) error {
 	r.authorizationCalls++
 	r.executor = executor
-	return r.unauthorized, r.adapterErr
+	if r.adapterErr == nil && len(r.unauthorized) > 0 {
+		return errors.Errorf("executor %s is not authorized as direct filler for configured adapters: %v", executor.Hex(), r.unauthorized)
+	}
+	return r.adapterErr
 }
 
 func (r *startupChainReader) validateGasTokens([]liquidlane.Route) error { return nil }

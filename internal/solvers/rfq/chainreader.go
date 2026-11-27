@@ -263,17 +263,7 @@ func (r *reader) validateDirectAuthorization(
 	for i := range vaults {
 		routes[i].Adapter = vaults[i].Adapter
 	}
-	authorized, err := r.ll.FilterAuthorizedRoutes(ctx, routes, executor)
-	if err != nil {
-		return err
-	}
-	if missing := liquidlane.UnauthorizedAdapters(routes, authorized); len(missing) > 0 {
-		return errors.Errorf(
-			"executor %s is not authorized as direct filler for configured adapters: %v",
-			executor.Hex(), missing,
-		)
-	}
-	return nil
+	return liquidlane.ValidateDirectAuthorization(ctx, r.ll.FilterAuthorizedRoutes, routes, executor)
 }
 
 // readPermissionedVaultInventories returns the subset of readVaultInventories the executor is

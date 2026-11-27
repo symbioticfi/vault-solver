@@ -681,7 +681,9 @@ func gasSnapshot(
 }
 
 // ReadAdapterSnapshot reads one complete LiquidLane adapter view for solvers that consume all routes.
-// An incomplete view fails with the reads that came back unusable.
+// An unresolved pause, authorization, liquidity or inventory read fails with the reads that came back
+// unusable. A failed isFiller or acquire-balance read only leaves the adapter unauthorized or the
+// balance unset; every drop is logged at V(1).
 func (r *Reader) ReadAdapterSnapshot(
 	ctx context.Context,
 	adapterAddress common.Address,
@@ -694,7 +696,7 @@ func (r *Reader) ReadAdapterSnapshot(
 	if len(routes) == 0 {
 		return AdapterSnapshot{}, errors.New("liquidlane: adapter has no resolved routes")
 	}
-	drop, drops := collectDrops()
+	drop, drops := collectDrops(ctx)
 	pausedByAdapter, err := r.readPaused(ctx, []common.Address{adapterAddress}, drop)
 	if err != nil {
 		return AdapterSnapshot{}, err
@@ -703,7 +705,7 @@ func (r *Reader) ReadAdapterSnapshot(
 	if !pausedResolved {
 		return AdapterSnapshot{}, errors.Errorf("liquidlane: adapter pause state unresolved: %s", drops())
 	}
-	drop, drops = collectDrops()
+	drop, drops = collectDrops(ctx)
 	auth, err := r.ReadAuth(ctx, []common.Address{adapterAddress}, filler, drop)
 	if err != nil {
 		return AdapterSnapshot{}, err
@@ -711,7 +713,7 @@ func (r *Reader) ReadAdapterSnapshot(
 	if len(auth) != 1 || auth[0].Adapter != adapterAddress {
 		return AdapterSnapshot{}, errors.Errorf("liquidlane: adapter authorization unresolved: %s", drops())
 	}
-	drop, drops = collectDrops()
+	drop, drops = collectDrops(ctx)
 	gasState, err := r.readGasSnapshot(ctx, routes, drop)
 	if err != nil {
 		return AdapterSnapshot{}, err
@@ -728,7 +730,7 @@ func (r *Reader) ReadAdapterSnapshot(
 			inventoryByRoute[route.ID] = DirectInventory(route, new(big.Int), new(big.Int))
 		}
 	} else {
-		drop, drops = collectDrops()
+		drop, drops = collectDrops(ctx)
 		inventory, inventoryErr := r.readInventory(ctx, routes, true, drop)
 		if inventoryErr != nil {
 			return AdapterSnapshot{}, inventoryErr

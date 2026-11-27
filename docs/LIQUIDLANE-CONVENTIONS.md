@@ -130,7 +130,9 @@ FilterAuthorizedRoutes(ctx, routes, filler, trace ...DropTrace) ([]Route, error)
 
 Every route, adapter or gas fact a read leaves out goes to the optional `DropTrace` as a `Drop` naming
 the failed check; a failed sub-call names its decoded revert (`getMaxAssets reverted: InvalidOracle()`).
-Without a trace the reader logs drops at V(1). `ReadAdapterSnapshot` puts the drops in its error.
+Without a trace the reader logs drops at V(1). `ReadAdapterSnapshot` logs every drop at V(1) and puts
+those of an unresolved read in its error; a failed `isFiller` or acquire-balance read only leaves the
+adapter unauthorized or the balance unset.
 
 Implementation rules:
 

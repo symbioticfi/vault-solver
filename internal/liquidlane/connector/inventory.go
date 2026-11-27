@@ -11,6 +11,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 // Precision is the connector's signed discount denominator; native adapters use 1e6.
@@ -137,6 +138,9 @@ func (o Offer) Read(ctx context.Context, chain Caller, chainID int64, block *big
 		return nil, errors.Errorf("minDiscount decode: %w", err)
 	}
 	if o.Discount.Cmp(minimum) < 0 {
+		// Expected until the listing catches up, so not an error that would mark the refresh degraded.
+		observability.Log(ctx).V(1).Info("connector offer outbid: discount below the connector's minDiscount",
+			"connector", o.Venue.Hex(), "discountId", o.DiscountID.Hex(), "discount", o.Discount, "minDiscount", minimum)
 		return nil, nil
 	}
 	probe, ok := liquidlane.OraclePriceProbe(o.TokenInDecimals, o.TokenOutDecimals)

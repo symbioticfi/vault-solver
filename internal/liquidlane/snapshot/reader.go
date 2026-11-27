@@ -161,7 +161,8 @@ func (r *Reader) Quote(
 }
 
 // Fill reads amount-specific quotes, their authorized direct subset and gas state. Every route a read
-// leaves out, including routes not authorized for direct use, goes to trace.
+// leaves out, including routes not authorized for direct use, goes to trace; Fill.Drops holds only the
+// routes the quote read dropped, since unauthorized routes still price through discount quotes.
 func (r *Reader) Fill(
 	ctx context.Context,
 	routes []liquidlane.Route,
@@ -173,8 +174,8 @@ func (r *Reader) Fill(
 	if len(trace) == 0 {
 		trace = []liquidlane.DropTrace{liquidlane.LogDrops(ctx)}
 	}
-	trace = append(slices.Clone(trace), func(d liquidlane.Drop) { drops = append(drops, d) })
-	physical, err := r.liquid.ReadFillQuotes(ctx, routes, tokenIn, amountIn, trace...)
+	quoteTrace := append(slices.Clone(trace), func(d liquidlane.Drop) { drops = append(drops, d) })
+	physical, err := r.liquid.ReadFillQuotes(ctx, routes, tokenIn, amountIn, quoteTrace...)
 	if err != nil {
 		return Fill{}, err
 	}

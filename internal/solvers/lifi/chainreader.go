@@ -136,17 +136,7 @@ func (r *reader) validateDirectAuthorization(
 	executorAddr common.Address,
 	routes []route,
 ) error {
-	direct, err := r.snapshots.FilterAuthorizedRoutes(ctx, routes, executorAddr)
-	if err != nil {
-		return err
-	}
-	if missing := liquidlane.UnauthorizedAdapters(routes, direct); len(missing) > 0 {
-		return errors.Errorf(
-			"executor %s is not authorized as direct filler for configured adapters: %v",
-			executorAddr.Hex(), missing,
-		)
-	}
-	return nil
+	return liquidlane.ValidateDirectAuthorization(ctx, r.snapshots.FilterAuthorizedRoutes, routes, executorAddr)
 }
 
 func (r *reader) orderIdentifier(

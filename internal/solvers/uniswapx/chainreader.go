@@ -106,16 +106,8 @@ func requireExecutorCaller(caller common.Address, results []chain.CallResult) er
 	)
 }
 
-func (r *reader) unauthorizedAdapters(
-	ctx context.Context,
-	executor common.Address,
-	routes []liquidlane.Route,
-) ([]common.Address, error) {
-	authorized, err := r.snapshots.FilterAuthorizedRoutes(ctx, routes, executor)
-	if err != nil {
-		return nil, err
-	}
-	return liquidlane.UnauthorizedAdapters(routes, authorized), nil
+func (r *reader) validateDirectAuthorization(ctx context.Context, executor common.Address, routes []liquidlane.Route) error {
+	return liquidlane.ValidateDirectAuthorization(ctx, r.snapshots.FilterAuthorizedRoutes, routes, executor)
 }
 
 func (r *reader) validateGasOracles(ctx context.Context, routes []liquidlane.Route) error {
