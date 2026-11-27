@@ -189,7 +189,8 @@ func bestInputLeg(
 		}
 		amount := minAmount(remaining, item.maxInput)
 		for _, candidate := range item.alternatives {
-			if candidate.MaxAmountIn.Cmp(amount) < 0 {
+			if candidate.MaxAmountIn.Cmp(amount) < 0 ||
+				(candidate.MinAmountIn != nil && amount.Cmp(candidate.MinAmountIn) < 0) {
 				continue
 			}
 			if !found || better(candidate, best) {
@@ -214,7 +215,8 @@ func bestOutputLeg(
 		}
 		amount := minBig(remaining, item.maxOutput)
 		for _, candidate := range item.alternatives {
-			if output(candidate, candidate.MaxAmountIn).Cmp(amount) < 0 {
+			if output(candidate, candidate.MaxAmountIn).Cmp(amount) < 0 ||
+				(candidate.MinAmountIn != nil && candidate.AmountInFor(amount).Cmp(candidate.MinAmountIn) < 0) {
 				continue
 			}
 			if !found || better(candidate, best) {

@@ -45,6 +45,9 @@ func dominates(left, right liquidlane.QuoteCandidate) bool {
 	if left.DiscountID != nil && right.DiscountID == nil {
 		return false
 	}
+	if left.MinAmountIn != nil && (right.MinAmountIn == nil || left.MinAmountIn.Cmp(right.MinAmountIn) > 0) {
+		return false
+	}
 	if left.Rate.Cmp(right.Rate) < 0 ||
 		left.MaxAmountIn.Cmp(right.MaxAmountIn) < 0 ||
 		left.MaxAmountOut.Cmp(right.MaxAmountOut) < 0 {

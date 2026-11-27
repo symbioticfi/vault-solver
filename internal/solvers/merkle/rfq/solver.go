@@ -146,6 +146,19 @@ func (s *Solver) planAward(ctx context.Context, row rfqbackend.OrdersResponseOrd
 			reasons = append(reasons, fmt.Sprintf("%s: unreserved %s below required %s", route.Venue.Hex(), route.MaxAssets, required))
 			continue
 		}
+		if route.Listing.MinOracleValue != "" || route.Listing.MaxOracleValue != "" {
+			bounds, err := liquidlane.ParseOracleBounds(route.Listing.MinOracleValue, route.Listing.MaxOracleValue)
+			if err != nil {
+				return nil, err
+			}
+			gross, err := s.Workflow.OracleValue(ctx, route.Venue, order.Request.TokenIn, order.Request.AmountIn, observed.BlockNumber)
+			if err != nil {
+				return nil, err
+			}
+			if !bounds.Contains(gross) {
+				continue
+			}
+		}
 		intent, err := plan([]filler.Leg{{Source: route, AmountOut: required}})
 		if reserve || err == nil {
 			return intent, err

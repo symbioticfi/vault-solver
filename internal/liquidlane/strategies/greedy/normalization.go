@@ -53,6 +53,22 @@ func NewQuoteCandidateWithTrace(
 			maxAmountOut, item.MaxRate, item.TokenInDecimals, item.TokenOutDecimals,
 		)
 	}
+	if item.OracleBounds.Min != nil || item.OracleBounds.Max != nil {
+		if !candidate.ExactPricing() {
+			return nil
+		}
+		if item.OracleBounds.Min != nil {
+			candidate.MinAmountIn = liquidlane.MinAmountInForAmountOut(
+				item.OracleBounds.Min, item.Price, item.TokenInDecimals, item.TokenOutDecimals,
+			)
+		}
+		if item.OracleBounds.Max != nil {
+			firstExcluded := liquidlane.MinAmountInForAmountOut(
+				item.OracleBounds.Max, item.Price, item.TokenInDecimals, item.TokenOutDecimals,
+			)
+			candidate.MaxAmountIn = minBig(candidate.MaxAmountIn, firstExcluded.Sub(firstExcluded, big.NewInt(1)))
+		}
+	}
 	if candidate.MaxAmountIn.Sign() <= 0 {
 		trace.Decline("inventory", "buffered capacity rounds maximum input below one input unit", "route", item.ID,
 			"capacity", maxAmountOut, "rate", candidate.Rate, "maxInput", candidate.MaxAmountIn)

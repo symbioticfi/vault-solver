@@ -47,6 +47,8 @@ type ListItem struct {
 	TokenToRedeem      string
 	Collateral         string
 	CollateralDecimals int
+	MinOracleValue     string
+	MaxOracleValue     string
 	Discount           string
 	Signer             string
 	Deadline           int64
@@ -158,7 +160,17 @@ func (c *Client) ListDiscounts(ctx context.Context) (*List, error) {
 		if err != nil {
 			return nil, errors.Errorf("private discounts: list: blockNumber: invalid decimal %q", d.GetBlockNumber())
 		}
+		minimum, err := oracleBound(d.AdditionalProperties, "minOracleValue")
+		if err != nil {
+			return nil, err
+		}
+		maximum, err := oracleBound(d.AdditionalProperties, "maxOracleValue")
+		if err != nil {
+			return nil, err
+		}
 		out.Discounts = append(out.Discounts, ListItem{
+			MinOracleValue:     minimum,
+			MaxOracleValue:     maximum,
 			DiscountID:         d.GetDiscountId(),
 			DiscountPrecision:  d.GetDiscountPrecision(),
 			Adapter:            d.GetAdapter(),
@@ -173,6 +185,16 @@ func (c *Client) ListDiscounts(ctx context.Context) (*List, error) {
 		})
 	}
 	return out, nil
+}
+
+func oracleBound(fields map[string]interface{}, name string) (string, error) {
+	if raw, exists := fields[name]; exists {
+		if value, valid := raw.(string); valid && value != "" {
+			return value, nil
+		}
+		return "", errors.Errorf("private discounts: malformed %s", name)
+	}
+	return "", nil
 }
 
 func closeResp(resp *http.Response) {

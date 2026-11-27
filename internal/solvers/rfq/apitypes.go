@@ -34,6 +34,8 @@ type quoteRequest struct {
 
 // quoteAdapter is one adapter inventory entry the backend offers for the request.
 type quoteAdapter struct {
+	MinOracleValue    string  `json:"minOracleValue,omitempty" pattern:"^[0-9]+$"`
+	MaxOracleValue    string  `json:"maxOracleValue,omitempty" pattern:"^[0-9]+$"`
 	DiscountPrecision string  `json:"discountPrecision" enum:"1000000,100000000"`
 	Price             string  `json:"price,omitempty" pattern:"^[0-9]+$" doc:"Undiscounted oracle price scaled by 1e18; required for every quote"`
 	TokenInDecimals   *int    `json:"tokenInDecimals,omitempty" minimum:"0" maximum:"255"`
@@ -210,6 +212,14 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address, r
 		inventory.DiscountPrecision = precision
 		inventory.RecipeExecutor = recipeExecutor
 	}
+	bounds, err := liquidlane.ParseOracleBounds(v.MinOracleValue, v.MaxOracleValue)
+	if err != nil {
+		return solverInventory{}, err
+	}
+	if (bounds.Min != nil || bounds.Max != nil) && recipeExecutor == (common.Address{}) {
+		return solverInventory{}, errors.Errorf("adapters[%d]: oracle tiers require a connector", index)
+	}
+	inventory.OracleBounds = bounds
 	inventory.BlockNumber = blockNumber
 	inventory.Price = price
 	return inventory, nil
