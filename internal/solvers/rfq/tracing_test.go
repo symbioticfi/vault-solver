@@ -166,6 +166,34 @@ func TestServer_QuoteTracingDeclines(t *testing.T) {
 	}
 }
 
+func TestServer_DiscountCapacityDeclineIncludesUncoveredInput(t *testing.T) {
+	rec := tracetest.Install(t)
+	srv := testServer()
+	log, capture := tracetest.CaptureLogs(t, 0)
+	srv.quotes.log, srv.quotes.discountsEnabled = log, true
+	body := validQuoteBody()
+	discountID := common.HexToHash("0xd").Hex()
+	body.Adapters[0].DiscountID, body.Adapters[0].MaxAssets = &discountID, "600000"
+	if rr := postQuote(t, srv.handler(), body, ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("quote = %d, want 204", rr.Code)
+	}
+
+	// An additional 10^12 - 1 input units still round to the same output cap.
+	const uncovered = "remainingAmountIn=399999000000000001"
+	if lines := strings.Join(capture(), "\n"); !strings.Contains(lines, uncovered) {
+		t.Errorf("production logs lack uncovered input: %s", lines)
+	}
+	span := tracetest.Ended(t, rec, "rfq.quote")
+	for _, event := range span.Events() {
+		for _, attr := range event.Attributes {
+			if event.Name == "declined" && attr.Key == "reason" && strings.Contains(attr.Value.AsString(), uncovered) {
+				return
+			}
+		}
+	}
+	t.Errorf("quote span lacks uncovered input: %+v", span.Events())
+}
+
 // TestExecution_OrderTraceLinksToQuote pins the fill trace and its best-effort link back to the
 // quote that produced the order (spec §12).
 func TestExecution_OrderTraceLinksToQuote(t *testing.T) {
@@ -263,6 +291,46 @@ func TestExecution_OrderTraceRecordsLinkMiss(t *testing.T) {
 	}
 	if rec := st.order("o1"); rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled", rec)
+	}
+}
+
+func TestExecution_QueuedExpiryLogsOrder(t *testing.T) {
+	store := newStore(time.Now)
+	store.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
+	store.boundUnsignedWork("o1", time.Unix(0, 0))
+	execution := newExec(t, store, nil, nil)
+	log, capture := tracetest.CaptureLogs(t, 0)
+	execution.log = log
+	if !execution.expireQueued(observability.WithLogger(t.Context(), log), store.order("o1")) {
+		t.Fatal("expected queued order to expire")
+	}
+	lines := capture()
+	if len(lines) != 1 || !strings.Contains(lines[0], `"orderId":"o1"`) || !strings.Contains(lines[0], `"quoteId":"q1"`) {
+		t.Fatalf("queued expiry logs = %v", lines)
+	}
+	if strings.Contains(lines[0], `"tx":`) {
+		t.Fatalf("queued expiry with no known transaction = %v", lines)
+	}
+}
+
+func TestExecution_ExpiryLogsKnownTransaction(t *testing.T) {
+	for _, backendExpiry := range []bool{false, true} {
+		store := newStore(time.Now)
+		store.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
+		store.boundUnsignedWork("o1", time.Unix(0, 0))
+		hash := common.HexToHash("0xcafe")
+		store.markNonceUncertain("o1", hash, "unknown outcome", false)
+		execution := newExec(t, store, nil, nil)
+		log, capture := tracetest.CaptureLogs(t, 0)
+		ctx := observability.WithLogger(t.Context(), log)
+		if backendExpiry {
+			execution.markExpired(ctx, "o1", common.Hash{}, "backend status expired")
+		} else if !execution.expireUnsigned(ctx, store.order("o1")) {
+			t.Fatal("expected local expiry")
+		}
+		if lines := capture(); len(lines) != 1 || !strings.Contains(lines[0], hash.Hex()) {
+			t.Fatalf("expiry did not log the known transaction: %v", lines)
+		}
 	}
 }
 

@@ -101,10 +101,7 @@ func TestUncertainFillKeepsIntent(t *testing.T) {
 			intent := &Intent{OrderID: "owned", Data: []byte{1}, Deadline: time.Now()}
 			sender := &fillertest.Sender{IsBusy: true, Result: tc.result, PollErr: tc.err}
 			e := pendingEngine(sender, intent)
-			_ = e.Tick(t.Context(), func(context.Context) (*Intent, error) {
-				t.Fatal("pending lane asked for new work")
-				return nil, nil
-			})
+			_, _ = e.Poll(t.Context())
 			if e.Pending() != intent || sender.Submits != 0 || sender.Polls != 1 {
 				t.Fatal("uncertain work lost ownership")
 			}
@@ -125,7 +122,8 @@ func TestSubmitOwnsTheLaneUntilSettlement(t *testing.T) {
 	if err := e.Submit(t.Context(), first); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Submit(t.Context(), &Intent{OrderID: "second", Spend: testSpend()}); !errors.Is(err, ErrBusy) || sender.Submits != 1 {
+	if err := e.Submit(t.Context(), &Intent{OrderID: "second", Spend: testSpend()}); !errors.Is(err, ErrBusy) || sender.Submits != 1 ||
+		!strings.Contains(err.Error(), "order first owns the signer lane") {
 		t.Fatalf("second fill entered a busy lane: %v", err)
 	}
 	sender.Result = fillertest.Confirmed()
@@ -135,14 +133,6 @@ func TestSubmitOwnsTheLaneUntilSettlement(t *testing.T) {
 	}
 	if idle, err := e.Await(t.Context()); idle != nil || err != nil {
 		t.Fatal("idle lane reported an outcome")
-	}
-}
-
-func TestTickRefusesUnownedSenderWork(t *testing.T) {
-	e := pendingEngine(&fillertest.Sender{IsBusy: true}, nil)
-	err := e.Tick(t.Context(), func(context.Context) (*Intent, error) { return nil, nil })
-	if err == nil {
-		t.Fatal("busy sender without an owner was accepted")
 	}
 }
 
@@ -167,19 +157,20 @@ func testEngine(t *testing.T, sender *fillertest.Sender) *Engine {
 	return e
 }
 
-// A completed fill advances directly to the next one; pending work uses polling.
 func TestRunContinuesToNextFillAfterConfirmation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	e := testEngine(t, &fillertest.Sender{IsBusy: true, Result: fillertest.Confirmed()})
-	e.Spends = nil
-	e.intent.Store(&Intent{OrderID: "pending"})
-	err := e.Run(ctx, func(context.Context) (*Intent, error) {
-		cancel()
-		return nil, nil
+	e := testEngine(t, &fillertest.Sender{Result: fillertest.Confirmed()})
+	first := &Intent{OrderID: "first", Spend: testSpend()}
+	err := e.Run(ctx, func(_ context.Context, idle bool) (*Intent, error) {
+		if e.Spends.Finalized(first.OrderID) && idle {
+			cancel()
+			return nil, nil
+		}
+		return first, errors.New("award reservation refresh timed out")
 	})
 	if !errors.Is(err, context.Canceled) {
-		t.Fatal("confirmed fill waited for the polling timer before the next one", err)
+		t.Fatal("confirmed fill waited for the next award poll", err)
 	}
 }
 
@@ -334,6 +325,9 @@ func TestAwaitTreatsConfirmationWaitAsProgress(t *testing.T) {
 			defer mu.Unlock()
 			if (len(failures) > 0) != tc.wantError {
 				t.Fatalf("error logs = %v, want error=%v", failures, tc.wantError)
+			}
+			if tc.wantError && !strings.Contains(failures[0], `"orderId"="award"`) {
+				t.Fatalf("receipt error is missing the award ID: %v", failures)
 			}
 		})
 	}

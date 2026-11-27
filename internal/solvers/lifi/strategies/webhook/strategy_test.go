@@ -5,10 +5,12 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
@@ -128,5 +130,21 @@ func TestWebhookStrategyKeepsFillTransportFailureTransient(t *testing.T) {
 	}
 	if types.IsPermanentFillDecisionError(err) {
 		t.Fatalf("transport failure was marked permanent: %v", err)
+	}
+}
+
+func TestWebhookStrategyNamesNullFillPlan(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("null"))
+	}))
+	defer server.Close()
+	client, err := webhook.NewClient(webhook.Config{URL: server.URL, Timeout: time.Second})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	plan, err := New(client).DecideFill(t.Context(), types.FillInput{})
+	if plan != nil || !errors.Is(err, types.ErrFillDeclined) || !strings.Contains(err.Error(), "returned a null plan") {
+		t.Fatalf("DecideFill = %+v, %v; want ErrFillDeclined naming the null plan", plan, err)
 	}
 }

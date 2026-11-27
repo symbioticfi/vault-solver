@@ -2,6 +2,7 @@ package defaultstrategy
 
 import (
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -485,6 +486,80 @@ func TestStrategyReservesLiveOffersAcrossDiscoveryPasses(t *testing.T) {
 			}
 			if total.Int64() != tc.want {
 				t.Fatalf("principal = %s, want %d", total, tc.want)
+			}
+		})
+	}
+}
+
+func TestStrategySkipReasons(t *testing.T) {
+	held := func(a types.AdapterSnapshot, auctionID, principal int64, ret *big.Int, open bool) []types.LiveOffer {
+		return []types.LiveOffer{{AdapterID: a.ID, AuctionID: auctionID, Principal: big.NewInt(principal), ExpectedReturn: ret, Open: open}}
+	}
+	target, err := offerReturn(big.NewInt(500), nil, testAuction(10, 500))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		edit   func(*types.AdapterSnapshot, *types.AuctionSnapshot) []types.LiveOffer
+		reason string
+	}{
+		{"zero request", func(_ *types.AdapterSnapshot, au *types.AuctionSnapshot) []types.LiveOffer {
+			au.AmountRequested = new(big.Int)
+			return nil
+		}, "amountRequested 0 is not positive"},
+		{"collateral mismatch", func(_ *types.AdapterSnapshot, au *types.AuctionSnapshot) []types.LiveOffer {
+			au.DepositAsset = common.Address{0xcc}
+			return nil
+		}, "does not match deposit asset"},
+		{"accepted offer", func(a *types.AdapterSnapshot, _ *types.AuctionSnapshot) []types.LiveOffer {
+			return held(*a, 10, 500, nil, false)
+		}, "live offer (principal 500) is already accepted"},
+		{"unknown principal", func(a *types.AdapterSnapshot, _ *types.AuctionSnapshot) []types.LiveOffer {
+			return []types.LiveOffer{{AdapterID: a.ID, AuctionID: 10, Open: true}}
+		}, "live offer has unknown principal"},
+		{"concurrency full", func(a *types.AdapterSnapshot, _ *types.AuctionSnapshot) []types.LiveOffer {
+			a.MaxConcurrent, a.OpenCount = 1, 1
+			return nil
+		}, "1 offers in flight reach maxConcurrent 1"},
+		{"fundable unknown", func(a *types.AdapterSnapshot, _ *types.AuctionSnapshot) []types.LiveOffer {
+			a.Fundable = nil
+			return nil
+		}, "fundable liquidity is unknown"},
+		{"maxAssets zero", func(a *types.AdapterSnapshot, _ *types.AuctionSnapshot) []types.LiveOffer {
+			a.MaxAssets = new(big.Int)
+			return nil
+		}, "per-request ceiling is 0 (fundable 1000, maxAssets 0)"},
+		{"ceiling below minAssets", func(a *types.AdapterSnapshot, _ *types.AuctionSnapshot) []types.LiveOffer {
+			a.MinAssets = big.NewInt(2000)
+			return nil
+		}, "per-request ceiling 1000 is below minAssets 2000"},
+		{"budget exhausted", func(a *types.AdapterSnapshot, _ *types.AuctionSnapshot) []types.LiveOffer {
+			return held(*a, 99, 1000, nil, false)
+		}, "budget exhausted: fundable 1000, committed 1000"},
+		{"principal below minAssets", func(a *types.AdapterSnapshot, au *types.AuctionSnapshot) []types.LiveOffer {
+			a.MinAssets, au.AmountRequested = big.NewInt(100), big.NewInt(50)
+			return nil
+		}, "principal 50 is below minAssets 100"},
+		{"cannot price", func(a *types.AdapterSnapshot, au *types.AuctionSnapshot) []types.LiveOffer {
+			au.MaxRateBps = 0
+			return nil
+		}, "principal 500 cannot be priced: invalid 3F auction maxRate"},
+		{"open offer current", func(a *types.AdapterSnapshot, _ *types.AuctionSnapshot) []types.LiveOffer {
+			return held(*a, 10, 500, target, true)
+		}, "already matches target"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter, auction := testAdapter(1, 1000), testAuction(10, 500)
+			live := tc.edit(&adapter, &auction)
+			out, err := New().DecideOffers(t.Context(), types.OfferInput{
+				Adapters: []types.AdapterSnapshot{adapter}, Auctions: []types.AuctionSnapshot{auction}, LiveOffers: live,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(out.Offers) != 0 || len(out.Skips) != 1 || !strings.Contains(out.Skips[0].Reason, tc.reason) {
+				t.Fatalf("offers=%+v skips=%+v, want one skip containing %q", out.Offers, out.Skips, tc.reason)
 			}
 		})
 	}

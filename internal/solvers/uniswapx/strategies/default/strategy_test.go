@@ -3,10 +3,12 @@ package defaultstrategy
 import (
 	"context"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
@@ -207,7 +209,7 @@ func TestLocalQuoteAndFillAgreeOnReservedPhysicalCapacity(t *testing.T) {
 				blocked := fillInput
 				blocked.Quotes = []liquidlane.FillQuote{narrow}
 				blocked.OutputAmount = big.NewInt(2 * amount)
-				if plan, err := strategy.DecideFill(t.Context(), blocked); err != nil || plan != nil {
+				if plan, err := strategy.DecideFill(t.Context(), blocked); !errors.Is(err, types.ErrFillDeclined) || plan != nil {
 					t.Fatalf("narrow source spent pending capacity: plan=%+v err=%v", plan, err)
 				}
 				plan, err := strategy.DecideFill(t.Context(), fillInput)
@@ -377,7 +379,7 @@ func TestDecideFillDoesNotDoubleSpendSharedCapacity(t *testing.T) {
 		TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(1_000), OutputAmount: big.NewInt(900),
 		MaxFeePerGas: new(big.Int), Quotes: quotes,
 	})
-	if err != nil || plan != nil {
+	if !errors.Is(err, types.ErrFillDeclined) || plan != nil {
 		t.Fatalf("plan = %+v, err %v", plan, err)
 	}
 }
@@ -416,14 +418,22 @@ func TestDecideFillHonorsPendingReservationAndDeadline(t *testing.T) {
 		Reservations: liquidlane.CapacityReservations{"capacity-1": big.NewInt(60)},
 	}
 	plan, err := strategy.DecideFill(context.Background(), base)
-	if err != nil || plan != nil {
+	if !errors.Is(err, types.ErrFillDeclined) || plan != nil || !strings.Contains(err.Error(), "reason=insufficient-capacity") {
 		t.Fatalf("reserved plan = %+v, err %v", plan, err)
 	}
 	base.Reservations = nil
 	base.Deadline = uint32(now.Add(30 * time.Second).Unix())
 	plan, err = strategy.DecideFill(context.Background(), base)
-	if err != nil || plan != nil {
+	want := "fill declined: order deadline 1800000030 is not after execution valid-after 1800000030 (chain time 1800000000 + buffer 30s)"
+	if !errors.Is(err, types.ErrFillDeclined) || plan != nil || err.Error() != want {
 		t.Fatalf("near-deadline plan = %+v, err %v", plan, err)
+	}
+	base.Deadline = 0
+	base.AmountIn = big.NewInt(1)
+	strategy.minAmount = big.NewInt(2)
+	if _, err := strategy.DecideFill(context.Background(), base); err == nil ||
+		err.Error() != "fill declined: amount in 1 is below minimum amount 2" {
+		t.Fatalf("below-minimum err %v", err)
 	}
 }
 
@@ -523,7 +533,7 @@ func TestLocalStrategyAggregation(t *testing.T) {
 				OutputAmount: big.NewInt(900), MaxFeePerGas: new(big.Int),
 				Quotes: []liquidlane.FillQuote{directFillQuote(input.Inventory[0].Route, 1000, 600, 1000), directFillQuote(other.Route, 1000, 600, 1000)},
 			})
-			if err != nil || (plan != nil) != (name == types.DefaultName) {
+			if (plan != nil) != (name == types.DefaultName) || (plan == nil) != errors.Is(err, types.ErrFillDeclined) {
 				t.Fatalf("fill=%+v err=%v", plan, err)
 			}
 			if plan != nil && len(plan.Routes) != 2 {
@@ -556,8 +566,11 @@ func TestLocalStrategyBufferAndGasPolicy(t *testing.T) {
 					Quotes:    []liquidlane.FillQuote{directFillQuote(input.Inventory[0].Route, 1_000, 2_000, 1_000)},
 				})
 				want := test.required == 990 && (test.fee == 0 || name == types.SingleName)
-				if err != nil || (plan != nil) != want {
+				if (plan != nil) != want || (plan == nil) != errors.Is(err, types.ErrFillDeclined) {
 					t.Fatalf("required=%d fee=%d plan=%+v err=%v", test.required, test.fee, plan, err)
+				}
+				if test.required == 991 && err.Error() != "fill declined: required amount out 991 exceeds max allocatable amount out 990" {
+					t.Fatalf("required-output err %v", err)
 				}
 				if plan != nil && plan.Routes[0].MinAmountOut.Int64() != test.required {
 					t.Fatal("single fill added a gas repayment margin")

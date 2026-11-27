@@ -16,12 +16,19 @@ var orderTupleArgs = abi.Arguments{{Type: executorBinding.GetABI().Methods["fill
 
 func decodeOrder(row rfqbackend.OrdersResponseOrdersInner, filler common.Address) (executor.IReactorOrder, []byte, error) {
 	var order executor.IReactorOrder
-	if row.OrderStatus != "open" || row.OrderId == "" || row.EncodedOrder == nil || row.ProtocolSignature == nil {
-		return order, nil, errors.New("incomplete executable order")
+	switch {
+	case row.OrderStatus != "open":
+		return order, nil, errors.Errorf("order status is %q, not open", row.OrderStatus)
+	case row.OrderId == "":
+		return order, nil, errors.New("awarded order has no orderId")
+	case row.EncodedOrder == nil:
+		return order, nil, errors.New("awarded order has no encodedOrder")
+	case row.ProtocolSignature == nil:
+		return order, nil, errors.New("awarded order has no protocolSignature")
 	}
 	encoded, err := hexutil.Decode(*row.EncodedOrder)
 	if err != nil {
-		return order, nil, errors.New("invalid encodedOrder")
+		return order, nil, errors.Errorf("invalid encodedOrder: %w", err)
 	}
 	values, err := orderTupleArgs.Unpack(encoded)
 	if err != nil {
@@ -33,31 +40,41 @@ func decodeOrder(row rfqbackend.OrdersResponseOrdersInner, filler common.Address
 	}
 	sig, err := hexutil.Decode(*row.ProtocolSignature)
 	if err != nil {
-		return order, nil, errors.New("invalid protocolSignature")
+		return order, nil, errors.Errorf("invalid protocolSignature: %w", err)
 	}
 	return order, sig, nil
 }
 
 // Execution uses the signed tuple; the backend's display amounts never size a trade.
 func orderTerms(order executor.IReactorOrder, filler common.Address) (common.Address, *big.Int, error) {
-	if order.Filler != filler || order.Request.TokenIn == (common.Address{}) || order.Request.AmountIn == nil || order.Request.AmountIn.Sign() <= 0 || order.Request.AmountIn.BitLen() > 256 {
-		return common.Address{}, nil, errors.New("invalid awarded input or filler")
-	}
-	if order.Request.Deadline == nil || !order.Request.Deadline.IsInt64() || order.Request.Deadline.Sign() <= 0 {
-		return common.Address{}, nil, errors.New("invalid order deadline")
-	}
-	if len(order.Outputs) == 0 || order.Outputs[0].Token == (common.Address{}) {
-		return common.Address{}, nil, errors.New("missing order outputs")
+	switch request := order.Request; {
+	case order.Filler != filler:
+		return common.Address{}, nil, errors.Errorf("order filler %s is not this filler %s", order.Filler.Hex(), filler.Hex())
+	case request.TokenIn == (common.Address{}):
+		return common.Address{}, nil, errors.New("order has no input token")
+	case request.AmountIn == nil || request.AmountIn.Sign() <= 0 || request.AmountIn.BitLen() > 256:
+		return common.Address{}, nil, errors.Errorf("order input amount %v is not a positive uint256", request.AmountIn)
+	case request.Deadline == nil || !request.Deadline.IsInt64() || request.Deadline.Sign() <= 0:
+		return common.Address{}, nil, errors.Errorf("order deadline %v is not a positive int64", request.Deadline)
+	case len(order.Outputs) == 0:
+		return common.Address{}, nil, errors.New("order has no outputs")
+	case order.Outputs[0].Token == (common.Address{}):
+		return common.Address{}, nil, errors.New("order output has no token")
 	}
 	token, total := order.Outputs[0].Token, new(big.Int)
-	for _, output := range order.Outputs {
-		if output.Token != token || output.Recipient == (common.Address{}) || output.Amount == nil || output.Amount.Sign() <= 0 {
-			return common.Address{}, nil, errors.New("one output token with positive payments required")
+	for i, output := range order.Outputs {
+		switch {
+		case output.Token != token:
+			return common.Address{}, nil, errors.Errorf("order output %d pays %s, not the first output's token %s", i, output.Token.Hex(), token.Hex())
+		case output.Recipient == (common.Address{}):
+			return common.Address{}, nil, errors.Errorf("order output %d has no recipient", i)
+		case output.Amount == nil || output.Amount.Sign() <= 0:
+			return common.Address{}, nil, errors.Errorf("order output %d amount %v is not positive", i, output.Amount)
 		}
 		total.Add(total, output.Amount)
 	}
 	if total.BitLen() > 256 {
-		return common.Address{}, nil, errors.New("order output exceeds uint256")
+		return common.Address{}, nil, errors.Errorf("order output total %s exceeds uint256", total)
 	}
 	return token, total, nil
 }

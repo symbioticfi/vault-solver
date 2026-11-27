@@ -100,7 +100,7 @@ func TestParseSubmittedOrderSkipsForeignOrderTargets(t *testing.T) {
 				output := sliceField(t, mapField(t, body, "order"), "outputs")[0].(map[string]any)
 				output["oracle"] = hexID(foreignOracle)
 			},
-			wantReason: "outputs[0].oracle does not match outputSettler",
+			wantReason: "outputs[0].oracle 000000000000000000000000008c3800f3ad9b3b662d002e90cc00000000ee17 does not match outputSettler",
 		},
 		{
 			name: "target chain output settler mismatch",
@@ -108,7 +108,7 @@ func TestParseSubmittedOrderSkipsForeignOrderTargets(t *testing.T) {
 				output := sliceField(t, mapField(t, body, "order"), "outputs")[0].(map[string]any)
 				output["settler"] = hexID(foreignOracle)
 			},
-			wantReason: "outputs[0].settler does not match outputSettler",
+			wantReason: "outputs[0].settler 000000000000000000000000008c3800f3ad9b3b662d002e90cc00000000ee17 does not match outputSettler",
 		},
 	}
 

@@ -185,9 +185,9 @@ func TestMorphoClientDiscoveryOracle(t *testing.T) {
 			if got[0].MarketID != marketID || got[0].Oracle != oracle {
 				t.Fatalf("market identity changed: %+v", got[0])
 			}
-			view, ok := marketInfoFromAPI(got[0])
-			if !ok {
-				t.Fatal("nested oracle market must remain usable by the monitor")
+			view, err := marketInfoFromAPI(got[0])
+			if err != nil {
+				t.Fatalf("nested oracle market must remain usable by the monitor: %v", err)
 			}
 			derived, err := deriveMarketID(view.info.Params)
 			if err != nil || derived != marketID || view.info.Params.Oracle != oracle {
@@ -242,7 +242,7 @@ func TestMorphoClientPositions(t *testing.T) {
 		if len(got) != 1 || got[0].BorrowShares != "" || got[0].Collateral != "" {
 			t.Fatalf("missing state should keep only identity/risk, got %+v", got)
 		}
-		if _, ok := positionStateFromAPI(got[0]); ok {
+		if _, err := positionStateFromAPI(got[0]); err == nil {
 			t.Fatal("missing state must fail closed before entering the monitor snapshot")
 		}
 	})

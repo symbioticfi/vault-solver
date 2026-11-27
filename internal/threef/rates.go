@@ -9,6 +9,15 @@ import (
 
 const YearSeconds int64 = 31_536_000
 
+// MinYieldReturn is the smallest return that clears the policy's yield floor.
+// The precision comes from the policy contract.
+func MinYieldReturn(principal, minimumYield *big.Int, precision int64) *big.Int {
+	if principal == nil || principal.Sign() <= 0 || minimumYield == nil || minimumYield.Sign() <= 0 || precision <= 0 {
+		return new(big.Int)
+	}
+	return ceilQuotient(new(big.Int).Mul(principal, minimumYield), big.NewInt(precision))
+}
+
 // ReturnBounds converts the auction APR to its expectedReturn interval. The API
 // requires at least a quarter of the lowest ramp APR, but exposes only the current
 // maximum. A quarter of that maximum is a conservative floor, possibly higher than
@@ -26,10 +35,14 @@ func ReturnBounds(principal *big.Int, maxAPR *big.Rat, basisSeconds int64) (mini
 	denominator := new(big.Int).Mul(maxAPR.Denom(), big.NewInt(10_000*YearSeconds))
 	maximum = new(big.Int).Quo(numerator, denominator)
 	denominator.Mul(denominator, big.NewInt(4))
-	minimum, remainder := new(big.Int), new(big.Int)
-	minimum.QuoRem(numerator, denominator, remainder)
+	return ceilQuotient(numerator, denominator), maximum, nil
+}
+
+func ceilQuotient(numerator, denominator *big.Int) *big.Int {
+	quotient, remainder := new(big.Int), new(big.Int)
+	quotient.QuoRem(numerator, denominator, remainder)
 	if remainder.Sign() != 0 {
-		minimum.Add(minimum, big.NewInt(1))
+		quotient.Add(quotient, big.NewInt(1))
 	}
-	return minimum, maximum, nil
+	return quotient
 }

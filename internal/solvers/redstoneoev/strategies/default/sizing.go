@@ -66,22 +66,28 @@ func collForBudget(budget *big.Int, q AdapterQuote) *big.Int {
 // revert the Morpho borrowShares underflow) AND by the adapter's getMaxAssets redemption liquidity (so the
 // swap can't ask for more than the vault can allocate and revert InsufficientAllocate).
 //
-// Returns the callback leg, expected loan output, and gross loan profit (expectedLoanOut - repaid). ok=false
-// when the position cannot liquidate profitably here. Bundle and gas economics are applied later by bundle
-// selection and operationData.
-func sizeLeg(c Candidate, price *big.Int, q AdapterQuote, accrued *big.Int, sp SizingParams) (sizedLeg, bool) {
+// Returns the callback leg, expected loan output, and gross loan profit (expectedLoanOut - repaid). On false
+// it writes the failed check to why (an out-parameter, so the hot path copies nothing when a leg sizes).
+// Bundle and gas economics are applied later by bundle selection and operationData.
+func sizeLeg(c Candidate, price *big.Int, q AdapterQuote, accrued *big.Int, sp SizingParams, why *legRejection) (sizedLeg, bool) {
 	m, p := c.Market.State, c.Position
 	if price == nil || price.Sign() <= 0 {
+		*why = legRejection{check: checkPriceNotPositive, v: [6]*big.Int{price}}
 		return sizedLeg{}, false
 	}
 	if q.MaxRate == nil || q.MaxRate.Sign() <= 0 {
-		return sizedLeg{}, false // can't price the exit
+		*why = legRejection{check: checkMaxRateNotPositive, v: [6]*big.Int{q.MaxRate}}
+		return sizedLeg{}, false
 	}
 	if !morpho.IsLiquidatableAt(p, price, m.Lltv, accrued, m.TotalBorrowShares) {
+		// The common case: record only the check. Storing six pointers through why costs a GC write
+		// barrier each; healthyValues rebuilds them when a tally prints the example.
+		why.check = checkHealthy
 		return sizedLeg{}, false
 	}
 	target := targetSeize(p.Collateral, sp.AllowFullLiquidation)
 	if target.Sign() <= 0 {
+		*why = legRejection{check: checkNoCollateral, v: [6]*big.Int{p.Collateral}, flag: sp.AllowFullLiquidation}
 		return sizedLeg{}, false
 	}
 	// LiquidationIncentiveFactor depends only on the market's lltv, so compute it ONCE here and feed it to
@@ -96,7 +102,8 @@ func sizeLeg(c Candidate, price *big.Int, q AdapterQuote, accrued *big.Int, sp S
 	// can't round up past the debt. maxSeize can floor to 0 for a dust position (debt worth < ~1 collateral
 	// unit); clamping target to 0 then returns ok=false below, so we skip it rather than submit a
 	// guaranteed-revert over-seize (do NOT guard on maxSeize > 0).
-	if maxSeize := morpho.MaxSeizeForFullDebt(p.BorrowShares, price, lif, accrued, m.TotalBorrowShares); target.Cmp(maxSeize) > 0 {
+	maxSeize := morpho.MaxSeizeForFullDebt(p.BorrowShares, price, lif, accrued, m.TotalBorrowShares)
+	if target.Cmp(maxSeize) > 0 {
 		target = maxSeize
 	}
 	// Clamp the seize by cached adapter redemption liquidity. This is a bidding-time safety check; the
@@ -107,15 +114,18 @@ func sizeLeg(c Candidate, price *big.Int, q AdapterQuote, accrued *big.Int, sp S
 		}
 	}
 	if target.Sign() <= 0 {
+		*why = legRejection{check: checkSeizeZero, v: [6]*big.Int{p.Collateral, maxSeize, q.MaxAssets}}
 		return sizedLeg{}, false
 	}
 	expectedLoanOut := expectedLoanOutFor(target, q, sp.SwapHaircutBps)
 	if expectedLoanOut.Sign() <= 0 {
+		*why = legRejection{check: checkZeroLoanOut, v: [6]*big.Int{target, q.MaxRate}, n: int64(sp.SwapHaircutBps)}
 		return sizedLeg{}, false
 	}
 	repaid := morpho.RepaidAssetsForSeizeAt(target, price, lif, accrued, m.TotalBorrowShares)
 	if expectedLoanOut.Cmp(repaid) <= 0 {
-		return sizedLeg{}, false // proceeds can't cover repayment after discount + haircut
+		*why = legRejection{check: checkProceedsBelowRepaid, v: [6]*big.Int{expectedLoanOut, repaid, target}}
+		return sizedLeg{}, false
 	}
 	profit := new(big.Int).Sub(expectedLoanOut, repaid) // > 0 here
 	leg := selectedLeg{

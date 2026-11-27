@@ -573,16 +573,19 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
   layer below).
 - **Leg pricing** — the adapter pays a swap in two floored steps: `getAmountOut` floors
   `amountIn × price × 10^outDec / (1e18 × 10^inDec)`, then the discount floors again (the signed discount
-  of a discount swap, or the adapter `minDiscount` bounding a direct swap). No per-token rate reproduces
-  that, and pricing above the payout is not an adapter revert (`InvalidSwapRate` cannot trigger, since
-  `discount ≥ minDiscount`); it reverts in `Reactor._fill`, which pulls the order's *signed* outputs out of
-  the Executor after `execute()` returns. With no `priceBufferBps` in RFQ there is no slack for it. Every
+  of a discount swap, or the adapter `minDiscount` bounding a direct swap). An overstated direct
+  payout reverts in the adapter. An overstated signed-discount payout can leave the Executor short
+  of the output the Reactor must transfer. RFQ has no `priceBufferBps`. Every
   `adapters[]` entry therefore carries `discount` instead of a rate: the signed discount on discount-backed
   entries and the adapter `minDiscount` on direct ones; fill-time discount inventory takes the signed
-  discount from `/discounts`. `NormalizeOracleInventory` prices each leg from the live `getAmountOut` at the
-  order amount, `AmountOutAfterDiscount(GrossAmountOut, discount)`, converted to a rate whose round trip
-  floors, so a candidate never prices above the payout and gives up at most one unit. A signed discount
-  below the adapter's current minimum is dropped, since the adapter reverts it; a direct leg prices at the
+  discount from `/discounts`. Native fill planning reads the oracle price and the order-sized
+  `getAmountOut` in one multicall and checks that they agree. When the token decimals make a price
+  probe impossible, the order-sized result identifies the integer price directly. Fill sizing,
+  payout and webhook validation then use the adapter's two floors at each leg's input amount.
+  When a direct leg absorbs remaining input, it reprices that final amount and caps the output
+  at the capacity left after the other legs' reservations.
+  A signed discount below the adapter's current minimum is dropped, since the adapter reverts it.
+  A direct leg prices at the
   higher of its entry's discount and the current minimum. The field is required and replaces `maxRate`, so
   this solver and symbioticfi/rfq-backend#403 deploy together.
 - **Quote latency** — `/quote` is synchronous in the backend's fan-out and performs no RPC calls.
@@ -699,6 +702,13 @@ removed body field.
 
 Merkle connector acquisition is owned by `internal/solvers/merkle/rfq` over the shared `internal/liquidlane/connector` core, as described in [RFQ-MERKLE.md](RFQ-MERKLE.md). The backend uses an optional `recipeExecutors` list for each connector: absent means native adapter; present means connector. It estimates capacity from recipe reads and checks current roles with batched RPC calls, without scanning historical block ranges or fetching curator permission trees. Advertised maxAssets is a read estimate; exact ordered funding and settlement are validated by the solver's complete outer fill simulation. It supplies `maxAssets`, price, token decimals and discount precision in quote inventory; account and recipe identities stay internal to backend capacity filtering and local solver caches. The solver chooses native behavior from local `adapters` configuration or Merkle behavior from local `recipeExecutors`; configuring both fails startup. Merkle mode derives each payment connector from its committed recipe and shares the existing Merkle fill component. Overlapping recipes use one account/asset capacity within each quote, and awards select a configured executor with the matching connector and RWA. The solver resolves account and a unique compatible executor from its startup cache, including pinned RWA swap permissions, without quote-time I/O. Multiple compatible cached recipes are declined. Backend quote and liquidity capacities use the minimum across applicable recipe alternatives; failed capacity reads suppress the connector. Pending signed work holds the signer fence; confirmed fills persist account/asset inclusion watermarks that reject older quote snapshots (see RFQ-MERKLE.md). The Merkle execution path reads the unchanged original recipe from `SetRecipe` only at the executor's known publication block, fetches the existing permission tree, verifies current roles and simulates the complete outer RFQ fill. It uses the shared chain reader without a separate publication indexer URL. The recipe commits one signed swap with the awarded amount and payment as inputs 0 and 1; no capacity metadata or embedded proofs are added. Include that asset's original issuer grants when redemption is required; route failures never fall back to custody.
 
+Full Merkle RFQ deployments poll and reserve queued awards while the SDK transaction
+manager signs and reconciles the single in-flight fill. Queued payouts reduce quote capacity by
+funding account and output token. On submission, the prepared spend replaces that award's
+estimate. The quote path requires a ready manager and a completed reservation refresh
+within the last two minutes. Preparation uses a separate deadline. Both phases reuse
+complete split pricing reads while the observed block and connector listings match.
+
 Quote-only Merkle deployments use that same startup discovery and require `curator.url`
 for read-only permission access. Initialization errors abort startup; there is no separate
 backend-list discovery or retry loop. Quote-only construction skips the fill signer and sender
@@ -747,6 +757,20 @@ proof. This never delays serving or adds arbitrary input RPCs. Policy gates dire
 zero liquidity does not invalidate a resolved structural route. No counter reset, learned request
 registry or token cap is introduced. Cardinality follows supported route history × fixed outcomes,
 not quote IDs/count. Replica-local award observations are not globally unique economic wins.
+
+### Rejection reasons
+
+Every quote decline, fill skip and order failure names the check that failed and the values it
+compared, in its log line, its span decline and the order's `LastError`. Inventory dropped before
+the strategy (pair mismatch, discount offer filters, adapter quote and discount checks, connector
+checks, no unreserved capacity) is recorded on a per-plan `inventoryDrops` trace: each drop logs
+at V(1), and the plan keeps counts by reason plus the last drop with its values. A fill whose
+strategy fails appends a summary to its failure reason:
+`(<n> configured vaults, <a> of <r> direct inventories authorized, <d> discount inventories
+[(list discounts failed: <err>)], <c> candidates from <i> inventories, dropped: <reason> x<k>, ...;
+last: <decline with values>)`. A `listDiscounts` failure no longer silently empties the discount
+set; it shows up in that summary while the fill proceeds on direct inventory. Quote-path declines
+name only configured adapters, never unproven request tokens.
 
 ### Per-vault Merkle authority
 

@@ -11,6 +11,7 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidconnector "github.com/symbioticfi/vault-solver/internal/liquidlane/connector"
+	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 )
 
@@ -22,7 +23,7 @@ const connectorDiscountPrecision = liquidconnector.Precision
 // capacity; this reader clips it by the current connector policy budget and shared reservations.
 func (r *reader) readConnectorCandidates(
 	ctx context.Context, inventory []solverInventory, tokenIn, tokenOut common.Address,
-	amountIn *big.Int, pending pendingReservations,
+	amountIn *big.Int, pending pendingReservations, trace liquidstrategies.DecisionTrace,
 ) ([]liquidlane.QuoteCandidate, error) {
 	if len(inventory) == 0 {
 		return nil, nil
@@ -32,7 +33,7 @@ func (r *reader) readConnectorCandidates(
 		return nil, errors.Errorf("connector quote block: %w", err)
 	}
 	if header == nil || header.Number == nil || !header.Number.IsUint64() {
-		return nil, errors.New("invalid connector quote block")
+		return nil, errors.Errorf("invalid connector quote block header %v", header)
 	}
 	block := header.Number
 	binding := connector.NewLiquidLaneConnector()
@@ -44,6 +45,9 @@ func (r *reader) readConnectorCandidates(
 	for _, item := range inventory {
 		if item.DiscountID == nil || item.Discount == nil || item.DiscountPrecision != connectorDiscountPrecision ||
 			item.Discount.Sign() < 0 || item.Discount.Cmp(big.NewInt(connectorDiscountPrecision)) >= 0 {
+			trace.Decline("inventory", "connector discount is not a signed discount in [0, precision)", "route", item.ID,
+				"discountId", item.DiscountID, "discount", item.Discount,
+				"precision", item.DiscountPrecision, "wantPrecision", connectorDiscountPrecision)
 			continue
 		}
 		outDecimals, err := r.ll.TokenDecimals(ctx, tokenOut)
@@ -51,7 +55,8 @@ func (r *reader) readConnectorCandidates(
 			return nil, errors.Errorf("connector output decimals: %w", err)
 		}
 		if outDecimals != item.TokenOutDecimals {
-			return nil, errors.New("connector output decimals mismatch")
+			return nil, errors.Errorf("connector %s output decimals %d do not match backend decimals %d",
+				item.Adapter.Hex(), outDecimals, item.TokenOutDecimals)
 		}
 		// One quote fails closed on any connector that cannot be read or contradicts the backend.
 		read, err := liquidconnector.Offer{
@@ -63,7 +68,9 @@ func (r *reader) readConnectorCandidates(
 			return nil, errors.Errorf("connector %w", err)
 		}
 		if read == nil {
-			continue // The connector's current minimum discount outbids the signed one.
+			trace.Decline("inventory", "connector minimum discount exceeds signed discount", "route", item.ID,
+				"discountId", item.DiscountID, "discount", item.Discount)
+			continue
 		}
 		// Also require the actual requested-amount oracle read to succeed (including freshness).
 		amountData, err := r.chain.CallContract(ctx, ethereum.CallMsg{To: &item.Adapter, Data: binding.PackGetAmountOut(tokenIn, amountIn)}, block)
@@ -71,8 +78,12 @@ func (r *reader) readConnectorCandidates(
 			return nil, errors.Errorf("connector getAmountOut amount: %w", err)
 		}
 		gross, err := binding.UnpackGetAmountOut(amountData)
-		if err != nil || gross.Cmp(liquidlane.AmountOutForRate(amountIn, read.Price, inDecimals, outDecimals)) != 0 {
-			return nil, errors.New("connector oracle quote mismatch")
+		if err != nil {
+			return nil, errors.Errorf("connector %s getAmountOut amount: %w", item.Adapter.Hex(), err)
+		}
+		if want := liquidlane.AmountOutForRate(amountIn, read.Price, inDecimals, outDecimals); gross.Cmp(want) != 0 {
+			return nil, errors.Errorf("connector %s oracle quote mismatch: getAmountOut %s, price %s implies %s",
+				item.Adapter.Hex(), gross, read.Price, want)
 		}
 		item.TokenInDecimals = inDecimals
 		item.CapacityID = read.CapacityID
@@ -87,11 +98,16 @@ func (r *reader) readConnectorCandidates(
 		reservations = pending(current)
 	}
 	allocated := liquidgreedy.AllocateInventoryCapacity(current, reservations, 0)
+	declineUnallocated(trace, current, allocated, reservations)
 	out := make([]liquidlane.QuoteCandidate, 0, len(allocated))
 	for _, item := range allocated {
-		if candidate := liquidgreedy.NewQuoteCandidate(item, item.MaxAssets); candidate != nil {
-			out = append(out, *candidate)
+		candidate := liquidgreedy.NewQuoteCandidate(item, item.MaxAssets)
+		if candidate == nil {
+			trace.Decline("inventory", "candidate prices no output", "route", item.ID,
+				"maxAssets", item.MaxAssets, "price", item.Price, "discount", item.Discount)
+			continue
 		}
+		out = append(out, *candidate)
 	}
 	return out, nil
 }

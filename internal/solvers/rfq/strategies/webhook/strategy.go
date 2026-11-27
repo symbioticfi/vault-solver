@@ -3,6 +3,8 @@ package webhookstrategy
 import (
 	"context"
 
+	"github.com/go-errors/errors"
+
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"gopkg.in/yaml.v3"
@@ -48,8 +50,11 @@ func (s *Strategy) DecideQuote(ctx context.Context, input types.QuoteInput) (typ
 // BuildFillPlan delegates to the external decider against the current fill snapshot.
 func (s *Strategy) BuildFillPlan(ctx context.Context, input types.FillInput) (*types.FillPlan, error) {
 	out, err := s.DecideQuote(ctx, input)
-	if err != nil || out.Decision == types.DecisionDecline {
+	if err != nil {
 		return nil, err
+	}
+	if out.Decision == types.DecisionDecline {
+		return nil, errors.Errorf("webhook declined fill: %q", out.Reason)
 	}
 	return strategies.FillPlanFromQuote(input, out)
 }

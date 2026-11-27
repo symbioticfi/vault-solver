@@ -13,6 +13,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 )
 
@@ -61,7 +62,8 @@ func (r *reader) readVaultInventories(
 // readQuoteCandidates turns amount-independent inventory into current,
 // amount-normalized LiquidLane candidates. This protocol/on-chain adaptation
 // belongs to the solver; strategies receive only the completed decision input.
-// Capacity held by won, unfinished orders is subtracted before allocation.
+// Capacity held by won, unfinished orders is subtracted before allocation. Each dropped inventory
+// item is declined on trace with the failed check.
 func (r *reader) readQuoteCandidates(
 	ctx context.Context,
 	inventory []solverInventory,
@@ -69,19 +71,22 @@ func (r *reader) readQuoteCandidates(
 	tokenOut common.Address,
 	amountIn *big.Int,
 	pending pendingReservations,
+	trace liquidstrategies.DecisionTrace,
 ) ([]liquidlane.QuoteCandidate, error) {
 	matching := make([]liquidlane.Inventory, 0, len(inventory))
 	connectorInventory := make([]liquidlane.Inventory, 0)
 	for _, item := range inventory {
-		if item.TokenIn == tokenIn && item.TokenOut == tokenOut {
-			if item.RecipeExecutor != (common.Address{}) {
-				connectorInventory = append(connectorInventory, item)
-			} else {
-				matching = append(matching, item)
-			}
+		switch {
+		case item.TokenIn != tokenIn || item.TokenOut != tokenOut:
+			trace.Decline("inventory", "inventory pair is not the order pair", "route", item.ID,
+				"tokenIn", item.TokenIn, "tokenOut", item.TokenOut, "orderTokenIn", tokenIn, "orderTokenOut", tokenOut)
+		case item.RecipeExecutor != (common.Address{}):
+			connectorInventory = append(connectorInventory, item)
+		default:
+			matching = append(matching, item)
 		}
 	}
-	connectorCandidates, err := r.readConnectorCandidates(ctx, connectorInventory, tokenIn, tokenOut, amountIn, pending)
+	connectorCandidates, err := r.readConnectorCandidates(ctx, connectorInventory, tokenIn, tokenOut, amountIn, pending, trace)
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +122,7 @@ func (r *reader) readQuoteCandidates(
 		reservations = pending(matching)
 	}
 	allocated := liquidgreedy.AllocateInventoryCapacity(matching, reservations, 0)
+	declineUnallocated(trace, matching, allocated, reservations)
 	if len(allocated) == 0 {
 		return connectorCandidates, nil
 	}
@@ -128,11 +134,11 @@ func (r *reader) readQuoteCandidates(
 			seen[item.ID] = true
 		}
 	}
-	quotes, err := r.ll.ReadFillQuotes(ctx, routes, tokenIn, amountIn)
+	quotes, err := r.ll.ReadPricedFillQuotes(ctx, routes, tokenIn, amountIn)
 	if err != nil {
 		return nil, err
 	}
-	return append(liquidgreedy.NormalizeOracleInventory(amountIn, allocated, quotes), connectorCandidates...), nil
+	return append(liquidgreedy.NormalizeOracleInventory(amountIn, allocated, quotes, trace), connectorCandidates...), nil
 }
 
 // cachedQuoteRoute resolves a configured native adapter without quote-time I/O.
@@ -274,13 +280,15 @@ func (r *reader) validateDirectAuthorization(
 // authorized to fill through: adapter.marketMaker() == executor, adapter.owner() == executor, or the
 // current marketMaker value (including zero) has delegated via adapter.isFiller(marketMaker, executor).
 // Used at fill time so we never build inputs for an unauthorized adapter. Mirrors
-// readPermissionedAdapterInventories in inventories.ts (marketMaker / owner / isFiller).
+// readPermissionedAdapterInventories in inventories.ts (marketMaker / owner / isFiller). read is the
+// inventory count before the authorization filter.
 func (r *reader) readPermissionedVaultInventories(
 	ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,
-) ([]solverInventory, error) {
+) (authorized []solverInventory, read int, err error) {
 	base, err := r.readVaultInventories(ctx, tokenIn, vaults)
 	if err != nil || len(base) == 0 {
-		return base, err
+		return base, len(base), err
 	}
-	return r.ll.FilterAuthorized(ctx, base, executor)
+	authorized, err = r.ll.FilterAuthorized(ctx, base, executor)
+	return authorized, len(base), err
 }

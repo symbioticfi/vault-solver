@@ -79,7 +79,7 @@ func TestSelectBundleSingleToken(t *testing.T) {
 			scoredFor(2, mustBig("30000000")),
 			scoredFor(3, mustBig("9000000")),
 		}, laneState, maxSettlementGasUnits, defaultPriceUpdateFeeds)
-		if skip != "" {
+		if skip.code != "" {
 			t.Fatalf("unexpected skip %q", skip)
 		}
 		if len(b.legs) != 3 || b.grossLoan.String() != "99000000" {
@@ -101,7 +101,7 @@ func TestSelectBundleSingleToken(t *testing.T) {
 			scoredFor(2, mustBig("30000000")),
 			scoredFor(3, mustBig("20000000")),
 		}, laneState, headerGasLimitForUsable(twoAcquireLegs), defaultPriceUpdateFeeds)
-		if skip != "" {
+		if skip.code != "" {
 			t.Fatalf("unexpected skip %q", skip)
 		}
 		if len(b.legs) != 2 || b.grossLoan.String() != "50000000" {
@@ -110,7 +110,7 @@ func TestSelectBundleSingleToken(t *testing.T) {
 	})
 
 	t.Run("empty scored set", func(t *testing.T) {
-		if _, skip := testBundleEngine(Config{}).selectBundleWithGas(nil, nil, 0, defaultPriceUpdateFeeds); skip != "no_legs" {
+		if _, skip := testBundleEngine(Config{}).selectBundleWithGas(nil, nil, 0, defaultPriceUpdateFeeds); skip.code != "no_legs" {
 			t.Fatalf("skip = %q, want no_legs", skip)
 		}
 	})
@@ -118,7 +118,7 @@ func TestSelectBundleSingleToken(t *testing.T) {
 	t.Run("net selection rejects an invalid rate", func(t *testing.T) {
 		if _, skip := testBundleEngine(Config{}).selectNetBundle(
 			[]scoredLeg{scoredFor(1, big.NewInt(1))}, nil, nil, big.NewInt(1), maxSettlementGasUnits, defaultPriceUpdateFeeds,
-		); skip != skipGasUnprofitable {
+		); skip.code != skipGasUnprofitable {
 			t.Fatalf("skip = %q, want %q", skip, skipGasUnprofitable)
 		}
 	})
@@ -134,7 +134,7 @@ func TestSelectBundleSingleToken(t *testing.T) {
 			scoredFor(1, mustBig("10000000")),
 			scoredFor(2, mustBig("10000000")),
 		}, laneState, maxSettlementGasUnits, defaultPriceUpdateFeeds)
-		if skip != "" {
+		if skip.code != "" {
 			t.Fatalf("unexpected skip %q", skip)
 		}
 		if len(b.legs) != 3 || b.legs[0].Borrower[19] != 1 || b.legs[1].Borrower[19] != 2 || b.legs[2].Borrower[19] != 3 {
@@ -204,7 +204,7 @@ func TestSelectBundlePerCollateralBudget(t *testing.T) {
 		withColl(2, 60, collA, 100),
 		withColl(3, 10, collB, 100),
 	}, laneState, maxSettlementGasUnits, defaultPriceUpdateFeeds)
-	if skip != "" {
+	if skip.code != "" {
 		t.Fatalf("unexpected skip %q", skip)
 	}
 	got := map[byte]bool{}
@@ -237,7 +237,7 @@ func TestSelectBundleAllowsSameMarketStaticLegs(t *testing.T) {
 		withMarket(2, 50, marketA),
 		withMarket(3, 40, marketB),
 	}, laneState, maxSettlementGasUnits, defaultPriceUpdateFeeds)
-	if skip != "" {
+	if skip.code != "" {
 		t.Fatalf("unexpected skip %q", skip)
 	}
 	got := map[byte]bool{}
@@ -272,8 +272,8 @@ func TestSelectBundleReplaysSameMarketSources(t *testing.T) {
 		borrower[19] = byteID
 		pos := morpho.PositionState{BorrowShares: mustBig("1200000000"), Collateral: mustBig("1000000000000000000")}
 		cand := Candidate{MarketID: market, Borrower: borrower, Market: info, Position: pos}
-		sized, ok := sizeLeg(cand, price, quote, info.State.TotalBorrowAssets, cfg.Sizing)
-		if !ok {
+		sized, rej := sizeLegForTest(cand, price, quote, info.State.TotalBorrowAssets, cfg.Sizing)
+		if rej.check != checkNone {
 			t.Fatal("fixture should size")
 		}
 		leg := sized.leg
@@ -296,7 +296,7 @@ func TestSelectBundleReplaysSameMarketSources(t *testing.T) {
 		Acquire:      map[common.Address]*big.Int{coll: mustBig("10000000000000000000000")},
 	}
 	b, skip := testBundleEngine(cfg).selectBundleWithGas([]scoredLeg{replayable(1), replayable(2)}, laneState, maxSettlementGasUnits, defaultPriceUpdateFeeds)
-	if skip != "" {
+	if skip.code != "" {
 		t.Fatalf("unexpected skip %q", skip)
 	}
 	if len(b.legs) != 2 {
@@ -331,7 +331,7 @@ func TestSelectNetBundleAvoidsGrossBestGasFalseSkip(t *testing.T) {
 		withColl(1, 640_000, collHigh),
 		withColl(2, 600_000, collLow),
 	}, morpho.Wad, laneState, big.NewInt(1), 0, defaultPriceUpdateFeeds)
-	if skip != "" {
+	if skip.code != "" {
 		t.Fatalf("lower-gross passing route should be selected, got skip %q", skip)
 	}
 	if len(b.legs) != 1 || b.legs[0].Borrower[19] != 2 {
@@ -361,7 +361,7 @@ func TestSelectNetBundleAvoidsGrossBestGasFalseSkip(t *testing.T) {
 		scored = append(scored, withAddr(wantBorrower, 600_000, collLow))
 
 		gotBundle, gotSkip := engine.selectNetBundle(scored, morpho.Wad, laneState, big.NewInt(1), maxSettlementGasUnits, defaultPriceUpdateFeeds)
-		if gotSkip != "" {
+		if gotSkip.code != "" {
 			t.Fatalf("lower-gross passing leg after the old window should be selected, got skip %q", gotSkip)
 		}
 		if len(gotBundle.legs) != 1 || gotBundle.legs[0].Borrower != wantBorrower {
@@ -392,7 +392,7 @@ func TestSelectNetBundleAllowsSameMarketStaticLegs(t *testing.T) {
 		withMarket(1, 700_000, collA),
 		withMarket(2, 700_000, collB),
 	}, morpho.Wad, laneState, big.NewInt(1), 0, defaultPriceUpdateFeeds)
-	if skip != "" {
+	if skip.code != "" {
 		t.Fatalf("unexpected skip %q", skip)
 	}
 	if len(b.legs) != 2 {
@@ -421,7 +421,7 @@ func TestSelectNetBundleSharesBaseGasAcrossLegs(t *testing.T) {
 		withColl(1, 590_000, collA),
 		withColl(2, 590_000, collB),
 	}, morpho.Wad, laneState, big.NewInt(1), 0, defaultPriceUpdateFeeds)
-	if skip != "" {
+	if skip.code != "" {
 		t.Fatalf("combined bundle should share base gas and pass, got skip %q", skip)
 	}
 	if len(b.legs) != 2 {
@@ -451,7 +451,7 @@ func TestSelectNetBundleSearchesPastGreedyBudgetTrap(t *testing.T) {
 		withColl(2, 620_000),
 		withColl(3, 620_000),
 	}, morpho.Wad, laneState, big.NewInt(1), 0, defaultPriceUpdateFeeds)
-	if skip != "" {
+	if skip.code != "" {
 		t.Fatalf("expected lower-gross pair to pass, got skip %q", skip)
 	}
 	got := map[byte]bool{}
@@ -484,8 +484,8 @@ func TestSearchBundleDoesNotRequireMonotonicScore(t *testing.T) {
 		Withdrawable: big.NewInt(0),
 		Acquire:      map[common.Address]*big.Int{{}: big.NewInt(2)},
 	}
-	best, ok := engine.searchBundle(legs, laneState, maxSettlementGasUnits, defaultPriceUpdateFeeds, scoreFn)
-	if !ok {
+	best, none := engine.searchBundle(legs, laneState, maxSettlementGasUnits, defaultPriceUpdateFeeds, scoreFn)
+	if none != "" {
 		t.Fatal("search should keep temporary negative states when a deeper bundle can become profitable")
 	}
 	if len(best.bundle.legs) != 2 {
@@ -534,9 +534,9 @@ func BenchmarkBundleSearchTrackedPositions(b *testing.B) {
 	}
 	engine := testBundleEngine(Config{})
 	for b.Loop() {
-		_, ok := engine.searchBundle(scored, nil, maxSettlementGasUnits, defaultPriceUpdateFeeds, func(bundle chosenBundle) *big.Int { return bundle.grossLoan })
-		if !ok {
-			b.Fatal("no bundle")
+		_, none := engine.searchBundle(scored, nil, maxSettlementGasUnits, defaultPriceUpdateFeeds, func(bundle chosenBundle) *big.Int { return bundle.grossLoan })
+		if none != "" {
+			b.Fatal(none)
 		}
 	}
 }

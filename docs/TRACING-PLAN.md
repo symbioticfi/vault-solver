@@ -559,7 +559,8 @@ reconciliation, with `order.id` on the fill. HTTP spans use peer `rfq-merkle`;
 chain reads retain the shared RPC spans. It has no quote server or quote-span links.
 
 **threef-merkle** (`internal/solvers/merkle/threef`) owns
-`threef-merkle.offers.tick` for its bounded policy/auction/offer iteration. Mint
-preparation and recovery retain the SDK spans; chain requests retain the shared
-RPC spans. Every transaction uses `solver=threef-merkle` through the common sender.
+`threef-merkle.offers.tick` for its bounded policy, auction and offer iteration and
+`threef-merkle.mint.tick` for the SDK keeper iteration. Policy rejections and idle
+mint decisions record decline events on those spans. Chain requests retain the
+shared RPC spans. Every transaction uses `solver=threef-merkle` through the common sender.
 There is no 3F offer span or provider dispatch in the generic `merkle` solver.

@@ -98,6 +98,17 @@ func OraclePriceProbe(tokenInDecimals, tokenOutDecimals int) (amountIn *big.Int,
 	return pow10(exponent), true
 }
 
+// ImpliedPrice is the smallest oracle price at which getAmountOut(amountIn) returns grossAmountOut.
+// It never exceeds the adapter's integer price, so it reproduces grossAmountOut at amountIn and
+// never overprices a smaller amount. Zero marks invalid input.
+func ImpliedPrice(amountIn, grossAmountOut *big.Int, tokenInDecimals, tokenOutDecimals int) *big.Int {
+	if amountIn == nil || amountIn.Sign() <= 0 {
+		return new(big.Int)
+	}
+	return MulDivUp(grossAmountOut, new(big.Int).Mul(rateScale, pow10(tokenInDecimals)),
+		new(big.Int).Mul(amountIn, pow10(tokenOutDecimals)))
+}
+
 // DiscountedRate is getMaxRate for an arbitrary discount: floor(price × (1e6 − discount) / 1e6).
 // It ranks alternatives; amounts come from DiscountedAmountOut.
 func DiscountedRate(price, discount *big.Int) *big.Int {

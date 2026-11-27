@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -430,5 +431,22 @@ func TestLiquidationResultSpanReportsOurFailure(t *testing.T) {
 				t.Fatalf("status %q does not name the failure %q", span.Status().Description, tc.errText)
 			}
 		})
+	}
+}
+
+func TestCanceledBidReportsContextError(t *testing.T) {
+	rec := tracetest.Install(t)
+	s, a := tracedAuction(t)
+	s.strategy = stubBidStrategy{err: &url.Error{
+		Op: "Post", URL: "https://example.invalid/synthetic-path", Err: context.DeadlineExceeded,
+	}}
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer cancel()
+	if got := s.buildBid(ctx, a, time.Now); got.skip != auctionOutcomeTooLate {
+		t.Fatalf("got outcome %q, want deadline skip", got.skip)
+	}
+	reason, count := tracetest.EventAttr(tracetest.Ended(t, rec, "oev.auction.bid"), "declined", "reason")
+	if count != 1 || !strings.Contains(reason, context.DeadlineExceeded.Error()) || strings.Contains(reason, "example.invalid") {
+		t.Fatal("bid decline must identify the timeout without the webhook endpoint")
 	}
 }

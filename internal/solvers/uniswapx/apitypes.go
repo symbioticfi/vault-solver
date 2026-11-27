@@ -56,7 +56,8 @@ type quoteResponse struct {
 
 	selectedCandidate liquidlane.CandidateID
 	declineReason     quoteDeclineReason
-	pairInScope       bool // observation from the exact snapshot used by this decision; never serialized
+	declineDetail     string // names the failed check for logs; never a metric label
+	pairInScope       bool   // observation from the exact snapshot used by this decision; never serialized
 }
 
 type orderEntry struct {
