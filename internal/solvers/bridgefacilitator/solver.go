@@ -659,7 +659,8 @@ func (s *Solver) refreshTargets(ctx context.Context) ([]Target, error) {
 			observability.Log(ctx).Info("skipping adapter: solver is not an authorized offer signer",
 				"adapter", adapterAddr.Hex(),
 				"signer", s.signerAddr.Hex(),
-				"offerSigner", r.signer.Hex())
+				"offerSigner", r.signer.Hex(),
+				"reason", r.unauthorized)
 			continue
 		}
 		target := Target{Adapter: adapterAddr, Vault: r.vault, Collateral: r.collateral}

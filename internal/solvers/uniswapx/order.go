@@ -259,7 +259,8 @@ func parseAndResolveV2Order(
 		return nil, errors.New("cosigner must be non-zero")
 	}
 	if source == orderSourceExclusiveV2 && order.CosignerData.ExclusiveFiller != cfg.Executor {
-		return nil, errors.Errorf("exclusive filler mismatch: got %s", order.CosignerData.ExclusiveFiller.Hex())
+		return nil, errors.Errorf("exclusive filler %s is not configured executor %s",
+			order.CosignerData.ExclusiveFiller.Hex(), cfg.Executor.Hex())
 	}
 	if source == orderSourcePublicV2 && order.CosignerData.ExclusiveFiller == cfg.Executor {
 		return nil, errors.New("order belongs to the exclusive V2 source")

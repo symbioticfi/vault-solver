@@ -104,7 +104,7 @@ type fillReader interface {
 	) ([]liquidlane.QuoteCandidate, error)
 	latestBlock(ctx context.Context) (uint64, time.Time, error)
 	readPermissionedVaultInventories(
-		ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,
+		ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault, trace liquidstrategies.DecisionTrace,
 	) (authorized []solverInventory, read int, err error)
 	// resolveVaults returns the config entries with Vault/Asset resolved from the adapter at startup
 	// (config carries only adapter addresses).
@@ -456,6 +456,7 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		To:     e.executor, Data: calldata, Deadline: submissionDeadline, Label: "rfq-fill",
 		Obsolete:       e.orderObsolete(orderID),
 		ObserveReceipt: observeReceipt,
+		RevertDecoder:  revertDecoder,
 	})
 	attemptHashes := append([]common.Hash{res.Hash}, res.Attempts...)
 	attempt := e.store.recordAttempt(orderID, attemptHashes...)
@@ -663,8 +664,8 @@ func (e *executionService) sendFill(
 		observability.Decline(submitCtx, "fill_fee_limit", "transaction fee ceiling reached: "+errString(res.Err))
 		return res, nil
 	}
-	if estimateExecutionReverted(res.Err) {
-		observability.Decline(submitCtx, "fill_estimate_reverted", "fill estimate reverted: "+errString(res.Err))
+	if kind, revert := classifyEstimateRevert(res.Err); kind != estimateNotReverted {
+		observability.Decline(submitCtx, "fill_estimate_reverted", "fill estimate reverted with "+revert+": "+errString(res.Err))
 		return res, nil
 	}
 	err = res.Err // included-but-unconfirmed still carries the wait failure
@@ -672,11 +673,6 @@ func (e *executionService) sendFill(
 		err = errors.Errorf("unknown transaction outcome %q", res.Outcome)
 	}
 	return res, err
-}
-
-func estimateExecutionReverted(err error) bool {
-	var revert *txmanager.ExecutionRevertError
-	return errors.As(err, &revert)
 }
 
 // resolveExecutable returns the executable payload for a polled order from the backend.
@@ -810,7 +806,7 @@ func (e *executionService) buildFillPlan(
 	// when no candidate vaults are configured (a discount-only solver), leaving discount legs only.
 	inv := make([]solverInventory, 0, len(e.vaults)+1)
 	if len(e.vaults) > 0 {
-		direct, read, derr := e.reader.readPermissionedVaultInventories(ctx, e.executor, order.Request.TokenIn, e.vaults)
+		direct, read, derr := e.reader.readPermissionedVaultInventories(ctx, e.executor, order.Request.TokenIn, e.vaults, summary.drops.trace)
 		if derr != nil {
 			return nil, derr
 		}

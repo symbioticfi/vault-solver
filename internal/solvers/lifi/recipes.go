@@ -9,7 +9,9 @@ import (
 	"github.com/go-errors/errors"
 
 	lifiexecutor "github.com/symbioticfi/vault-solver/api/bindings/lifi/executor"
+	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/execution"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
@@ -43,6 +45,7 @@ func newRecipeSettlement(s *Solver, cfg filler.Config, deps solver.Deps) (*recip
 		return nil, err
 	}
 	lane.MinValidity, lane.Decimals = recipeMinValidity, s.tokenMetadata.Get
+	lane.Workflow.Reverts = connector.RevertDecoder(&lifiexecutor.LiquidLaneLifiExecutorMetaData, &inputsettler.ILifiInputSettlerMetaData)
 	return &recipeSettlement{s: s, lane: lane}, nil
 }
 

@@ -88,18 +88,25 @@ func TestInventoryLensBatchFailuresStayScoped(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		result chain.CallResult
+		want   string
 	}{
-		{name: "reverted"},
-		{name: "malformed", result: chain.CallResult{Success: true, ReturnData: []byte{1}}},
-		{name: "wrong token count", result: batchLensOutput(t, []lens.FrontendLiquidityLensMaxAssetsResult{{Success: true, MaxAssets: big.NewInt(62)}})},
+		{name: "reverted", result: revertedWith(t, "InvalidVault()"), want: "lens getMaxAssetsBatch reverted: InvalidVault()"},
+		{name: "malformed", result: chain.CallResult{Success: true, ReturnData: []byte{1}}, want: "lens getMaxAssetsBatch: "},
+		{
+			name:   "wrong token count",
+			result: batchLensOutput(t, []lens.FrontendLiquidityLensMaxAssetsResult{{Success: true, MaxAssets: big.NewInt(62)}}),
+			want:   "lens getMaxAssetsBatch returned 1 capacities for 2 tokens",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r, backend, routes := lensInventoryFixture(t)
 			backend.results[0] = tc.result
-			inventory, err := r.ReadInventory(t.Context(), routes)
+			var drops []Drop
+			inventory, err := r.ReadInventory(t.Context(), routes, func(d Drop) { drops = append(drops, d) })
 			if err != nil || len(inventory) != 1 || inventory[0].ID != routes[1].ID {
 				t.Fatalf("unaffected adapter lost: inventory %+v, error %v", inventory, err)
 			}
+			assertDrops(t, drops, []Route{routes[0], routes[2]}, tc.want, tc.want)
 		})
 	}
 }

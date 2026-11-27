@@ -156,6 +156,7 @@ func (s *Solver) handleLiquidationResult(ctx context.Context, raw []byte) {
 		}
 		if recorded {
 			s.metrics.breakerFailure()
+			s.replayFailedSettlement(ctx, r.Data.TxHash)
 		}
 	}
 }

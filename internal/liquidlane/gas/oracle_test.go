@@ -172,6 +172,35 @@ func TestOracleReaderIgnoresDeprecatedAnsweredInRound(t *testing.T) {
 	}
 }
 
+func TestOracleReaderNamesFeedRevert(t *testing.T) {
+	nativeFeed := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	tokenFeed := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	token := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	now := time.Unix(1_800_000_000, 0)
+	stringType, err := abi.NewType("string", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reason, err := abi.Arguments{{Type: stringType}}.Pack("No data present")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := NewOracleReader(oracleMulticaller{now: now, results: []chain.CallResult{
+		oracleRoundResult(t, 2000_00000000, now.Unix()), oracleDecimalsResult(t),
+		{ReturnData: append([]byte{0x08, 0xc3, 0x79, 0xa0}, reason...)}, oracleDecimalsResult(t),
+	}}, OracleConfig{
+		NativeUSDFeed: USDFeed{Address: nativeFeed, MaxAge: time.Minute},
+		TokenUSDFeeds: map[common.Address]USDFeed{token: {Address: tokenFeed, MaxAge: time.Minute}},
+	})
+	if err != nil {
+		t.Fatalf("NewOracleReader: %v", err)
+	}
+	_, err = reader.Read(t.Context(), []Token{{Address: token, Decimals: 6}})
+	if want := `latestRoundData reverted: "No data present"`; err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("Read error = %v, want %q", err, want)
+	}
+}
+
 func oracleRoundResult(t *testing.T, answer, updatedAt int64) chain.CallResult {
 	t.Helper()
 	return oracleRoundResultWithAnsweredInRound(t, answer, updatedAt, 10)

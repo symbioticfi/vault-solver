@@ -239,6 +239,9 @@ func (s *Solver) startFill(
 		if discountErr != nil {
 			err = errors.Errorf("%w (discount route refresh failed: %v)", err, discountErr)
 		}
+		if dropped := liquidlane.SummarizeDrops(snapshot.Drops); dropped != "" {
+			err = errors.Errorf("%w (%s)", err, dropped)
+		}
 		return nil, err
 	}
 	plan, data, discountValidUntil := prepared.plan, prepared.data, prepared.validUntil
@@ -275,6 +278,7 @@ func (s *Solver) startFill(
 		Obsolete:       s.orderObsolete(order),
 		Label:          "uniswapx-fill",
 		ObserveReceipt: observeReceipt,
+		RevertDecoder:  revertDecoder,
 	})
 	if err != nil {
 		return nil, err
@@ -544,7 +548,8 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 	s.fillPath().fillSettled()
 	if result.NotAdmitted {
 		// The lane refusing a fill is an expected outcome, not a failure of this fill.
-		observability.Decline(ctx, "fill_not_admitted", errorReason(result.Err))
+		resultErr := revertDecoder.Explain(result.Err)
+		observability.Decline(ctx, "fill_not_admitted", errorReason(resultErr))
 		s.observeFillOutcome(liquidlane.FillOutcomeNotAdmitted)
 		s.retry(order.Hash, now, false)
 		observability.Log(ctx).V(1).Info(
@@ -552,7 +557,7 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 			"source", order.Source,
 			"orderHash", order.Hash.Hex(),
 			"quoteId", order.QuoteID,
-			"error", result.Err,
+			"error", resultErr,
 		)
 		return
 	}
@@ -586,10 +591,7 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 		return
 	}
 	if !outcome.Included() {
-		err = result.Err
-		if err == nil {
-			err = errors.Errorf("unknown transaction outcome %q", outcome)
-		}
+		err = explainFillFailure(result)
 		s.observeFillOutcome(liquidlane.FillOutcomeFailure)
 		s.retry(order.Hash, now, true)
 		s.recordOrderFillFailure(ctx, order, now)
@@ -616,6 +618,15 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 	}
 	s.recordFillSuccess()
 	s.complete(order.Hash, now)
+}
+
+// explainFillFailure names why a fill was not included. txmanager already adds the replayed reason
+// of a mined revert; estimate and relay reverts are decoded here.
+func explainFillFailure(result txmanager.Result) error {
+	if result.Err == nil {
+		return errors.Errorf("unknown transaction outcome %q", result.Outcome)
+	}
+	return revertDecoder.Explain(result.Err)
 }
 
 // recordOwnedFillAttempt retains signed ownership across retries without changing failure budgets.

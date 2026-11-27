@@ -2,9 +2,11 @@ package filler
 
 import (
 	"context"
+	"math/big"
 	"sync/atomic"
 	"time"
 
+	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
@@ -55,6 +57,8 @@ type Outcome struct {
 	Hash     common.Hash
 	Block    uint64
 	Reverted bool
+	// Revert names why a reverted fill failed, from a replay at the parent block.
+	Revert string
 }
 
 // Engine owns one settlement contract's Merkle fill lane. At most one fill is in flight:
@@ -189,7 +193,8 @@ func (e *Engine) send(ctx context.Context, intent *Intent) error {
 	if err != nil && !e.Sender.Busy() && e.intent.CompareAndSwap(intent, nil) {
 		e.Spends.Release(intent.OrderID)
 	}
-	return err
+	// The SDK manager's gas estimate is where a fill that stopped settling first reverts.
+	return e.Workflow.Explain(err)
 }
 
 // Poll returns the pending fill's canonical outcome, or nil while it is still in flight.
@@ -203,7 +208,7 @@ func (e *Engine) Poll(ctx context.Context) (outcome *Outcome, err error) {
 	defer func() { end(err) }()
 	result, err := e.Sender.Poll(ctx)
 	if err != nil || result == nil {
-		return nil, err
+		return nil, e.Workflow.Explain(err)
 	}
 	if result.Hash == (common.Hash{}) || result.Execution == nil || result.Execution.TxHash != result.Hash {
 		return nil, errors.New("fill sender returned invalid execution identity")
@@ -221,9 +226,27 @@ func (e *Engine) Poll(ctx context.Context) (outcome *Outcome, err error) {
 			return nil, err
 		}
 	}
-	observability.Log(ctx).Info("fill transaction finalized", "orderId", intent.OrderID, "tx", result.Hash.Hex(), "reverted", result.Reverted)
 	e.intent.CompareAndSwap(intent, nil)
-	return &Outcome{OrderID: intent.OrderID, Hash: result.Hash, Block: block, Reverted: result.Reverted}, nil
+	// The lane is free before the replay, so diagnosing a revert never delays the next fill.
+	var revert string
+	log := observability.Log(ctx)
+	if result.Reverted {
+		revert = e.replay(ctx, intent, block)
+		log = log.WithValues("revert", revert)
+	}
+	log.Info("fill transaction finalized", "orderId", intent.OrderID, "tx", result.Hash.Hex(), "reverted", result.Reverted)
+	return &Outcome{OrderID: intent.OrderID, Hash: result.Hash, Block: block, Reverted: result.Reverted, Revert: revert}, nil
+}
+
+// replay names why a mined fill reverted: its receipt carries no reason. The host chain client
+// is the replayer; a reader that cannot replay leaves the reason unavailable.
+func (e *Engine) replay(ctx context.Context, intent *Intent, block uint64) string {
+	replayer, ok := e.Workflow.Chain.(chain.MinedCallReplayer)
+	if !ok {
+		return "revert reason unavailable: the chain reader cannot replay mined calls"
+	}
+	w := e.Workflow
+	return w.Decoder().MinedRevert(ctx, replayer, ethereum.CallMsg{From: w.Signer, To: &w.Filler, Data: intent.Data}, new(big.Int).SetUint64(block))
 }
 
 // Await polls until the pending fill settles. It returns nil when no fill is pending. It gives

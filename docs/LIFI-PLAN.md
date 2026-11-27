@@ -724,6 +724,10 @@ LI.FI order server ──(WS: opened/funded StandardOrder)──▶ lifi solver
 - **Executor surplus** may remain as a standing balance. The current split-route executor ABI has no sweep
   entrypoint; recovery therefore requires the deployment's proxy-upgrade administration rather than the
   runtime solver.
+- **Revert reasons**: estimate, relay and read reverts are decoded with the LiquidLane core, ERC-20,
+  executor and input-settler ABIs (`lifiReverts`); a mined fill revert is replayed by the txmanager through
+  the request's `RevertDecoder`. The output settler's ABI is not vendored, so its errors decode as their raw
+  selector and arguments.
 
 ---
 

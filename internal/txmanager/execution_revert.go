@@ -2,11 +2,15 @@ package txmanager
 
 import (
 	"bytes"
+	"context"
+	"math/big"
 	"strings"
 
-	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
+
+	"github.com/symbioticfi/vault-solver/internal/chain"
 )
 
 // ExecutionRevertError is an execution failure returned by gas estimation or by a write relay's
@@ -45,21 +49,27 @@ func executionRevert(err error) *ExecutionRevertError {
 	if errors.As(err, &revert) {
 		return revert
 	}
-	var rpcErr rpc.Error
-	if (!errors.As(err, &rpcErr) || rpcErr.ErrorCode() != 3) &&
-		!strings.Contains(strings.ToLower(err.Error()), "execution reverted") {
+	// A node may omit or malformedly encode its payload. It still reported a revert;
+	// an undecodable payload is not evidence of a transport outage.
+	data, reverted := chain.RevertData(err)
+	if !reverted {
 		return nil
 	}
-	var data []byte
-	var dataErr rpc.DataError
-	if errors.As(err, &dataErr) {
-		if encoded, ok := dataErr.ErrorData().(string); ok {
-			// A node may omit or malformedly encode its payload. It still reported a revert;
-			// an undecodable payload is not evidence of a transport outage.
-			if decoded, decodeErr := hexutil.Decode(encoded); decodeErr == nil {
-				data = decoded
-			}
-		}
-	}
 	return &ExecutionRevertError{Data: data, Cause: err}
+}
+
+// minedRevertReason replays a reverted transaction to name the revert its receipt lacks. It runs on
+// the lifecycle owner only for a failed receipt; MinedRevert bounds the replay. A nil decoder still
+// names Error(string) and Panic(uint256).
+func (m *Manager) minedRevertReason(
+	ctx context.Context, decoder *chain.RevertDecoder, tx *types.Transaction, block *big.Int,
+) string {
+	replayer, ok := m.backend.(chain.MinedCallReplayer)
+	if !ok || tx == nil || tx.To() == nil {
+		return "revert reason unavailable: no replay"
+	}
+	// The gas limit is kept so an out-of-gas revert reproduces.
+	return decoder.MinedRevert(ctx, replayer, ethereum.CallMsg{
+		From: m.signer.Address(), To: tx.To(), Gas: tx.Gas(), Value: tx.Value(), Data: tx.Data(),
+	}, block)
 }

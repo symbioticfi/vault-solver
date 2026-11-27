@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 
 const (
 	maxResponseBytes int64 = 2 << 20
+	maxRows                = 4096
 	requestTimeout         = 30 * time.Second
 	// exactMaxRateKey preserves the upstream decimal before the generated float32 conversion.
 	exactMaxRateKey   = "exactMaxRate"
@@ -45,18 +47,38 @@ func validateAPIConfig(cfg apiConfig) error {
 	if err := validateURL(cfg.URL); err != nil {
 		return err
 	}
-	if !envName.MatchString(cfg.APIKeyEnv) || cfg.Broker == (common.Address{}) {
-		return errors.New("3f API key environment name and nonzero broker are required")
+	if !envName.MatchString(cfg.APIKeyEnv) {
+		return errors.New("3f apiKeyEnv is not an environment variable name")
+	}
+	if cfg.Broker == (common.Address{}) {
+		return errors.New("3f broker must be a nonzero address")
 	}
 	return nil
 }
 
+// validateURL names the failed check without echoing the URL, which may carry credentials.
 func validateURL(baseURL string) error {
 	u, err := url.Parse(baseURL)
-	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return errors.New("3f URL must be an http(s) origin without credentials, query or fragment")
+	var problem string
+	switch {
+	case err != nil:
+		problem = "does not parse"
+	case u.Scheme != "https" && u.Scheme != "http":
+		problem = "scheme is not http or https"
+	case u.Host == "":
+		problem = "has no host"
+	case u.User != nil:
+		problem = "contains credentials"
+	case u.RawQuery != "" || u.ForceQuery:
+		problem = "contains a query"
+	case u.Fragment != "":
+		problem = "contains a fragment"
+	case u.Path != "" && u.Path != "/":
+		problem = "has a path"
+	default:
+		return nil
 	}
-	return nil
+	return errors.Errorf("3f URL %s; it must be an http(s) origin", problem)
 }
 
 func newClient(cfg apiConfig) (*apiClient, error) {
@@ -81,8 +103,15 @@ func (c *apiClient) Identity(ctx context.Context, account common.Address) error 
 	if err != nil {
 		return apiError(ctx, "read identity", response, err)
 	}
-	if identity == nil || !matches(identity.Facilitator, c.broker) || !matches(identity.OfferAddress, account) || account == (common.Address{}) {
-		return errors.New("3f broker or default maker mismatch")
+	switch {
+	case account == (common.Address{}):
+		return errors.New("3f executor account is the zero address")
+	case identity == nil:
+		return errors.New("3f identity response is empty")
+	case !matches(identity.Facilitator, c.broker):
+		return errors.Errorf("3f identity facilitator %.66q differs from configured broker %s", identity.Facilitator, c.broker.Hex())
+	case !matches(identity.OfferAddress, account):
+		return errors.Errorf("3f identity offerAddress %.66q differs from executor account %s", identity.OfferAddress, account.Hex())
 	}
 	makers, response, err := c.c.FacilitatorAPI.AdminControllerListMakersV1(ctx).XApiKey("").Execute()
 	closeResponse(response)
@@ -90,19 +119,24 @@ func (c *apiClient) Identity(ctx context.Context, account common.Address) error 
 		return apiError(ctx, "read enrolled makers", response, err)
 	}
 	var found bool
-	for _, maker := range makers {
+	for i, maker := range makers {
 		if !validAddress(maker.Maker) {
-			return errors.New("3f invalid enrolled maker")
+			return errors.Errorf("3f enrolled maker %d address %.66q is not a nonzero address", i, maker.Maker)
 		}
 		if matches(maker.Maker, account) {
-			if found || !maker.SubmissionsEnabled || !maker.IsDefault {
-				return errors.New("3f default maker is not uniquely enabled")
+			switch {
+			case found:
+				return errors.Errorf("3f maker %s is enrolled more than once", account.Hex())
+			case !maker.SubmissionsEnabled:
+				return errors.Errorf("3f maker %s has submissions disabled", account.Hex())
+			case !maker.IsDefault:
+				return errors.Errorf("3f maker %s is not the default maker", account.Hex())
 			}
 			found = true
 		}
 	}
 	if !found {
-		return errors.New("3f default maker is not enrolled")
+		return errors.Errorf("3f account %s is not an enrolled maker", account.Hex())
 	}
 	return nil
 }
@@ -113,12 +147,15 @@ func (c *apiClient) Offers(ctx context.Context) ([]threef.OfferDto, error) {
 	if err != nil {
 		return nil, apiError(ctx, "list offers", response, err)
 	}
-	if rows == nil || len(rows) > 4096 {
-		return nil, errors.New("3f invalid or oversized offers response")
+	if rows == nil {
+		return nil, errors.New("3f offers response is empty")
 	}
-	for _, row := range rows {
+	if len(rows) > maxRows {
+		return nil, errors.Errorf("3f offers response has %d rows, above the %d-row bound", len(rows), maxRows)
+	}
+	for i, row := range rows {
 		if err = validateOffer(row); err != nil {
-			return nil, err
+			return nil, errors.Errorf("3f offers response row %d: %w", i, err)
 		}
 	}
 	return rows, nil
@@ -131,19 +168,37 @@ func (c *apiClient) Auctions(ctx context.Context) ([]threef.AuctionDto, error) {
 		return nil, apiError(ctx, "list auctions", response, err)
 	}
 	// The generated response keeps a fresh copy of its body. Preserve exact rate numbers from it.
+	switch {
+	case rows == nil || response == nil:
+		return nil, errors.New("3f auctions response is empty")
+	case len(rows) > maxRows:
+		return nil, errors.Errorf("3f auctions response has %d rows, above the %d-row bound", len(rows), maxRows)
+	}
 	var raw []map[string]json.RawMessage
-	if rows == nil || len(rows) > 4096 || response == nil || json.NewDecoder(response.Body).Decode(&raw) != nil || len(raw) != len(rows) {
-		return nil, errors.New("3f invalid auctions response")
+	if err := json.NewDecoder(response.Body).Decode(&raw); err != nil {
+		return nil, errors.Errorf("3f auctions response is not an array of objects: %w", err)
+	}
+	if len(raw) != len(rows) {
+		return nil, errors.Errorf("3f auctions response has %d raw rows but %d decoded rows", len(raw), len(rows))
 	}
 	for i := range rows {
-		if validateID(rows[i].Id) != nil || !validAddress(rows[i].RequestId) || rows[i].Status == "" {
-			return nil, errors.New("3f invalid auction identity")
+		if err := validateID(rows[i].Id); err != nil {
+			return nil, errors.Errorf("3f auctions response row %d: %w", i, err)
 		}
-		if !rows[i].AmountRequested.IsSet() || !rows[i].MaxRate.IsSet() {
-			return nil, errors.New("3f missing auction amount or rate")
+		switch {
+		case !validAddress(rows[i].RequestId):
+			return nil, errors.Errorf("3f auction %v: requestId %.66q is not a nonzero address", rows[i].Id, rows[i].RequestId)
+		case rows[i].Status == "":
+			return nil, errors.Errorf("3f auction %v has no status", rows[i].Id)
+		case !rows[i].AmountRequested.IsSet():
+			return nil, errors.Errorf("3f auction %v has no amountRequested", rows[i].Id)
+		case !rows[i].MaxRate.IsSet():
+			return nil, errors.Errorf("3f auction %v has no maxRate", rows[i].Id)
 		}
-		if amount := rows[i].AmountRequested.Get(); amount != nil && !validUint(*amount, false) {
-			return nil, errors.New("3f invalid auction amount")
+		if amount := rows[i].AmountRequested.Get(); amount != nil {
+			if _, err := uintAmount(*amount); err != nil {
+				return nil, errors.Errorf("3f auction %v amountRequested: %w", rows[i].Id, err)
+			}
 		}
 		if rows[i].AdditionalProperties == nil {
 			rows[i].AdditionalProperties = make(map[string]any)
@@ -153,12 +208,12 @@ func (c *apiClient) Auctions(ctx context.Context) ([]threef.AuctionDto, error) {
 			var number any
 			d := json.NewDecoder(bytes.NewReader(value))
 			d.UseNumber()
-			if d.Decode(&number) != nil {
-				return nil, errors.New("3f invalid auction rate")
+			if err := d.Decode(&number); err != nil {
+				return nil, errors.Errorf("3f auction %v maxRate does not decode: %w", rows[i].Id, err)
 			}
 			n, ok := number.(json.Number)
 			if !ok {
-				return nil, errors.New("3f invalid auction rate")
+				return nil, errors.Errorf("3f auction %v maxRate is a JSON %T, not a number", rows[i].Id, number)
 			}
 			rows[i].AdditionalProperties[exactMaxRateKey] = string(n)
 		}
@@ -172,12 +227,8 @@ func (c *apiClient) Auctions(ctx context.Context) ([]threef.AuctionDto, error) {
 
 // Create sends exactly one request. Its caller must retain the immutable DTO in RAM before invoking it.
 func (c *apiClient) Create(ctx context.Context, dto threef.CreateOfferDto) (*threef.CreateOfferResponseDto, error) {
-	nonce, nonceErr := uintAmount(dto.Nonce)
-	if nonceErr != nil || !nonce.IsInt64() {
-		return nil, errors.New("3f offer nonce must be a nonnegative int64")
-	}
-	if validateID(dto.AuctionId) != nil || !matches(dto.Maker, c.broker) || !validUint(dto.Amount, true) || !validUint(dto.ExpectedReturn, false) || !validUint(dto.Expiration, true) || dto.UseCallback || dto.ChainId != nil || dto.ExecutionMode != nil || dto.Signature != nil || dto.PushAuthorizationSignature != nil || dto.AuthorizationDeadline != nil || len(dto.AdditionalProperties) > 0 {
-		return nil, errors.New("3f invalid unsigned PUSH offer")
+	if problem := unsignedOfferProblem(dto, c.broker); problem != "" {
+		return nil, errors.Errorf("3f unsigned PUSH offer on auction %v: %s", dto.AuctionId, problem)
 	}
 	dto.Maker = lower(c.broker)
 	result, response, err := c.c.OfferAPI.OfferControllerCreateV1(ctx).CreateOfferDto(dto).Execute()
@@ -185,24 +236,74 @@ func (c *apiClient) Create(ctx context.Context, dto threef.CreateOfferDto) (*thr
 	if err != nil {
 		return nil, apiError(ctx, "create offer", response, err)
 	}
-	if result == nil || validateID(result.Id) != nil {
-		return nil, errors.New("3f invalid created offer ID")
+	if result == nil {
+		return nil, errors.New("3f create offer response is empty")
+	}
+	if err := validateID(result.Id); err != nil {
+		return nil, errors.Errorf("3f created offer: %w", err)
 	}
 	return result, nil
+}
+
+// unsignedOfferProblem names the first field that keeps dto from being an unsigned PUSH offer by
+// broker, "" when it is one.
+func unsignedOfferProblem(dto threef.CreateOfferDto, broker common.Address) string {
+	if nonce, err := uintAmount(dto.Nonce); err != nil || !nonce.IsInt64() {
+		return fmt.Sprintf("nonce %q is not a nonnegative int64", dto.Nonce)
+	}
+	if err := validateID(dto.AuctionId); err != nil {
+		return err.Error()
+	}
+	switch {
+	case !matches(dto.Maker, broker):
+		return fmt.Sprintf("maker %q is not broker %s", dto.Maker, broker.Hex())
+	case !validUint(dto.Amount, true):
+		return fmt.Sprintf("amount %q is not a positive uint256", dto.Amount)
+	case !validUint(dto.ExpectedReturn, false):
+		return fmt.Sprintf("expectedReturn %q is not a uint256", dto.ExpectedReturn)
+	case !validUint(dto.Expiration, true):
+		return fmt.Sprintf("expiration %q is not a positive uint256", dto.Expiration)
+	case dto.UseCallback:
+		return "useCallback is set"
+	case dto.ChainId != nil:
+		return "chainId is set"
+	case dto.ExecutionMode != nil:
+		return "executionMode is set"
+	case dto.Signature != nil:
+		return "signature is set"
+	case dto.PushAuthorizationSignature != nil:
+		return "pushAuthorizationSignature is set"
+	case dto.AuthorizationDeadline != nil:
+		return "authorizationDeadline is set"
+	case len(dto.AdditionalProperties) > 0:
+		return fmt.Sprintf("has %d additional properties", len(dto.AdditionalProperties))
+	}
+	return ""
 }
 
 // Cancel rechecks selection state; the API's own atomic guard handles acceptance racing the POST.
 func (c *apiClient) Cancel(ctx context.Context, id uint64) (*threef.CancelOfferResponseDto, error) {
 	if id == 0 || id >= 1<<24 {
-		return nil, errors.New("3f offer ID must be an exact positive integer below 16777216")
+		return nil, errors.Errorf("3f offer ID %d must be an exact positive integer below 16777216", id)
 	}
 	row, response, err := c.c.OfferAPI.OfferControllerGetByIdV1(ctx, float32(id)).Maker(lower(c.broker)).Execute()
 	closeResponse(response)
 	if err != nil {
 		return nil, apiError(ctx, "read offer before cancellation", response, err)
 	}
-	if row == nil || validateOffer(*row) != nil || row.Id != float32(id) || row.Status != "SUBMITTED" || row.ExecutionMode != "PUSH" {
-		return nil, errors.New("3f only unaccepted PUSH offers can be cancelled")
+	if row == nil {
+		return nil, errors.Errorf("3f offer %d read before cancellation is empty", id)
+	}
+	if err := validateOffer(*row); err != nil {
+		return nil, errors.Errorf("3f offer %d read before cancellation: %w", id, err)
+	}
+	switch {
+	case row.Id != float32(id):
+		return nil, errors.Errorf("3f offer %d read before cancellation returned offer %v", id, row.Id)
+	case row.Status != "SUBMITTED":
+		return nil, errors.Errorf("3f offer %d has status %.32q; only SUBMITTED offers can be cancelled", id, row.Status)
+	case row.ExecutionMode != "PUSH":
+		return nil, errors.Errorf("3f offer %d has execution mode %.32q; only PUSH offers can be cancelled", id, row.ExecutionMode)
 	}
 	dto := *threef.NewCancelOfferDto(float32(id), lower(c.broker))
 	result, response, err := c.c.OfferAPI.OfferControllerCancelV1(ctx).CancelOfferDto(dto).Execute()
@@ -210,8 +311,13 @@ func (c *apiClient) Cancel(ctx context.Context, id uint64) (*threef.CancelOfferR
 	if err != nil {
 		return nil, apiError(ctx, "cancel offer", response, err)
 	}
-	if result == nil || result.Id != float32(id) || result.Status != "CANCELLED" {
-		return nil, errors.New("3f invalid cancelled offer response")
+	switch {
+	case result == nil:
+		return nil, errors.Errorf("3f cancel offer %d response is empty", id)
+	case result.Id != float32(id):
+		return nil, errors.Errorf("3f cancel offer %d response names offer %v", id, result.Id)
+	case result.Status != "CANCELLED":
+		return nil, errors.Errorf("3f cancel offer %d response has status %.32q, want CANCELLED", id, result.Status)
 	}
 	return result, nil
 }
@@ -219,37 +325,51 @@ func (c *apiClient) Cancel(ctx context.Context, id uint64) (*threef.CancelOfferR
 // validateID bounds the generated float32 representation to its exact consecutive integer range.
 func validateID(id float32) error {
 	if id <= 0 || id >= 1<<24 || float64(id) != math.Trunc(float64(id)) || math.IsNaN(float64(id)) {
-		return errors.New("3f ID must be an exact positive integer below 16777216")
+		return errors.Errorf("3f ID %v must be an exact positive integer below 16777216", id)
 	}
 	return nil
 }
 
 func validateOffer(row threef.OfferDto) error {
-	if validateID(row.Id) != nil || validateID(row.AuctionId) != nil || !validAddress(row.Maker) || !validAddress(row.RequestId) {
-		return errors.New("3f invalid offer identity")
+	if err := validateID(row.Id); err != nil {
+		return errors.Errorf("3f offer id: %w", err)
+	}
+	if err := validateID(row.AuctionId); err != nil {
+		return errors.Errorf("3f offer %v auctionId: %w", row.Id, err)
+	}
+	switch {
+	case !validAddress(row.Maker):
+		return errors.Errorf("3f offer %v: maker %.66q is not a nonzero address", row.Id, row.Maker)
+	case !validAddress(row.RequestId):
+		return errors.Errorf("3f offer %v: requestId %.66q is not a nonzero address", row.Id, row.RequestId)
 	}
 	switch row.Status {
 	case "SUBMITTED", "ACCEPTED", "AWAITING_MINT", "CANCELLED", "SUCCEEDED", "FAILED", "NOT_ACCEPTED":
 	default:
-		return errors.New("3f unknown offer status")
+		return errors.Errorf("3f offer %v has unknown status %.32q", row.Id, row.Status)
 	}
-	if row.ExecutionMode != "PUSH" && row.ExecutionMode != "PULL" {
-		return errors.New("3f unknown offer execution mode")
+	switch {
+	case row.ExecutionMode != "PUSH" && row.ExecutionMode != "PULL":
+		return errors.Errorf("3f offer %v has unknown execution mode %.32q", row.Id, row.ExecutionMode)
+	case row.ExecutionMode == "PUSH" && row.Signature.Get() != nil:
+		return errors.Errorf("3f PUSH offer %v carries an executable signature", row.Id)
+	case !row.Signature.IsSet():
+		return errors.Errorf("3f offer %v has no signature field", row.Id)
+	case !row.MintDeadline.IsSet():
+		return errors.Errorf("3f offer %v has no mintDeadline field", row.Id)
 	}
-	if row.ExecutionMode == "PUSH" && row.Signature.Get() != nil {
-		return errors.New("3f PUSH offer contains executable signature")
-	}
-	if !row.Signature.IsSet() || !row.MintDeadline.IsSet() {
-		return errors.New("3f missing offer signature or mint deadline")
-	}
-	for _, value := range []string{row.Amount, row.ExpectedReturn, row.FilledAmount, row.FilledExpectedReturn, row.PendingAmount, row.PendingExpectedReturn, row.Nonce, row.Expiration} {
-		if !validUint(value, false) {
-			return errors.New("3f invalid offer amount or nonce")
+	for _, field := range []struct{ name, value string }{
+		{"amount", row.Amount}, {"expectedReturn", row.ExpectedReturn}, {"filledAmount", row.FilledAmount},
+		{"filledExpectedReturn", row.FilledExpectedReturn}, {"pendingAmount", row.PendingAmount},
+		{"pendingExpectedReturn", row.PendingExpectedReturn}, {"nonce", row.Nonce}, {"expiration", row.Expiration},
+	} {
+		if _, err := uintAmount(field.value); err != nil {
+			return errors.Errorf("3f offer %v %s: %w", row.Id, field.name, err)
 		}
 	}
 	if deadline := row.MintDeadline.Get(); deadline != nil {
 		if _, err := time.Parse(time.RFC3339Nano, *deadline); err != nil {
-			return errors.New("3f invalid mint deadline")
+			return errors.Errorf("3f offer %v mintDeadline %.40q is not RFC 3339", row.Id, *deadline)
 		}
 	}
 	return nil
@@ -293,14 +413,18 @@ func (t boundedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		clone.Header.Set("x-api-key", key)
 	}
+	// The transport error and URL can carry credentials; the method and path are our own.
 	response, err := http.DefaultTransport.RoundTrip(clone)
 	if err != nil {
-		return nil, errors.New("3f HTTP transport failed")
+		return nil, errors.Errorf("3f HTTP transport failed for %s %s", req.Method, req.URL.Path)
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
-	if err != nil || int64(len(body)) > maxResponseBytes {
-		return nil, errors.New("3f response read failed or exceeded bound")
+	if err != nil {
+		return nil, errors.Errorf("3f %s %s response read failed after %d bytes", req.Method, req.URL.Path, len(body))
+	}
+	if int64(len(body)) > maxResponseBytes {
+		return nil, errors.Errorf("3f %s %s response exceeds %d bytes", req.Method, req.URL.Path, maxResponseBytes)
 	}
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
 		if err = checkJSON(body); err != nil {

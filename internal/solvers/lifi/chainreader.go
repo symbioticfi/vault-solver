@@ -10,6 +10,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
+	"github.com/symbioticfi/vault-solver/api/bindings/lifi/executor"
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -19,6 +20,7 @@ import (
 
 var (
 	lifiInputSettler = inputsettler.NewILifiInputSettler()
+	lifiReverts      = liquidlane.RevertDecoder(&executor.LiquidLaneLifiExecutorMetaData, &inputsettler.ILifiInputSettlerMetaData)
 )
 
 type reader struct {
@@ -72,29 +74,38 @@ func (r *reader) validateExecutor(
 	outputSettler common.Address,
 	caller common.Address,
 ) error {
+	// AllowFailure keeps a failing read's own revert data instead of Multicall3's generic one.
 	calls := []chain.Call{
-		{Target: executorAddr, Data: lifiExecutor.PackINPUTSETTLER()},
-		{Target: executorAddr, Data: lifiExecutor.PackOUTPUTSETTLER()},
-		{Target: executorAddr, Data: lifiExecutor.PackIsCaller(caller)},
+		{Target: executorAddr, AllowFailure: true, Data: lifiExecutor.PackINPUTSETTLER()},
+		{Target: executorAddr, AllowFailure: true, Data: lifiExecutor.PackOUTPUTSETTLER()},
+		{Target: executorAddr, AllowFailure: true, Data: lifiExecutor.PackIsCaller(caller)},
 	}
 	results, err := r.chain.Multicall(ctx, calls)
 	if err != nil {
-		return errors.Errorf("executor configuration: %w", err)
+		return errors.Errorf("executor configuration: %w", lifiReverts.Explain(err))
 	}
-	if len(results) != len(calls) || !results[0].Success || !results[1].Success || !results[2].Success {
-		return errors.New("executor configuration: unresolved")
+	if len(results) != len(calls) {
+		return errors.Errorf("executor configuration: multicall returned %d results for %d calls", len(results), len(calls))
 	}
-	gotInput, inputErr := lifiExecutor.UnpackINPUTSETTLER(results[0].ReturnData)
-	gotOutput, outputErr := lifiExecutor.UnpackOUTPUTSETTLER(results[1].ReturnData)
-	if inputErr != nil || outputErr != nil {
-		return errors.New("executor immutables: malformed response")
+	for i, method := range []string{"INPUT_SETTLER", "OUTPUT_SETTLER", "isCaller"} {
+		if !results[i].Success {
+			return errors.Errorf("executor configuration: %s() reverted (revert %s)", method, lifiReverts.Describe(results[i].ReturnData))
+		}
+	}
+	gotInput, err := lifiExecutor.UnpackINPUTSETTLER(results[0].ReturnData)
+	if err != nil {
+		return errors.Errorf("executor immutables: malformed INPUT_SETTLER() response: %w", err)
+	}
+	gotOutput, err := lifiExecutor.UnpackOUTPUTSETTLER(results[1].ReturnData)
+	if err != nil {
+		return errors.Errorf("executor immutables: malformed OUTPUT_SETTLER() response: %w", err)
 	}
 	if gotInput != inputSettler || gotOutput != outputSettler {
 		return errors.Errorf("executor immutables mismatch: input=%s output=%s", gotInput.Hex(), gotOutput.Hex())
 	}
 	allowed, err := lifiExecutor.UnpackIsCaller(results[2].ReturnData)
 	if err != nil {
-		return errors.New("executor caller authorization: malformed response")
+		return errors.Errorf("executor caller authorization: malformed isCaller() response: %w", err)
 	}
 	if !allowed {
 		return errors.Errorf("executor caller %s is not authorized", caller.Hex())
@@ -108,7 +119,7 @@ func (r *reader) validateZeroGovernanceFee(ctx context.Context, inputSettler com
 		Data: lifiInputSettler.PackGovernanceFee(),
 	}, nil)
 	if err != nil {
-		return errors.Errorf("input settler governance fee: %w", err)
+		return errors.Errorf("input settler governance fee: %w", lifiReverts.Explain(err))
 	}
 	fee, err := lifiInputSettler.UnpackGovernanceFee(ret)
 	if err != nil {
@@ -125,17 +136,7 @@ func (r *reader) validateDirectAuthorization(
 	executorAddr common.Address,
 	routes []route,
 ) error {
-	direct, err := r.snapshots.FilterAuthorizedRoutes(ctx, routes, executorAddr)
-	if err != nil {
-		return err
-	}
-	if missing := liquidlane.UnauthorizedAdapters(routes, direct); len(missing) > 0 {
-		return errors.Errorf(
-			"executor %s is not authorized as direct filler for configured adapters: %v",
-			executorAddr.Hex(), missing,
-		)
-	}
-	return nil
+	return liquidlane.ValidateDirectAuthorization(ctx, r.snapshots.FilterAuthorizedRoutes, routes, executorAddr)
 }
 
 func (r *reader) orderIdentifier(
@@ -149,7 +150,7 @@ func (r *reader) orderIdentifier(
 	}
 	ret, err := r.chain.CallContract(ctx, ethereum.CallMsg{To: &inputSettler, Data: data}, nil)
 	if err != nil {
-		return common.Hash{}, errors.Errorf("call orderIdentifier: %w", err)
+		return common.Hash{}, errors.Errorf("call orderIdentifier: %w", lifiReverts.Explain(err))
 	}
 	orderID, err := lifiInputSettler.UnpackOrderIdentifier(ret)
 	if err != nil {
@@ -165,7 +166,7 @@ func (r *reader) orderStatus(ctx context.Context, inputSettler common.Address, o
 	}
 	ret, err := r.chain.CallContract(ctx, ethereum.CallMsg{To: &inputSettler, Data: data}, nil)
 	if err != nil {
-		return 0, errors.Errorf("call orderStatus: %w", err)
+		return 0, errors.Errorf("call orderStatus: %w", lifiReverts.Explain(err))
 	}
 	status, err := lifiInputSettler.UnpackOrderStatus(ret)
 	if err != nil {

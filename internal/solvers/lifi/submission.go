@@ -125,6 +125,7 @@ func (s *Solver) submitFill(
 		},
 		Label:          "lifi-fill",
 		ObserveReceipt: observeReceipt,
+		RevertDecoder:  lifiReverts,
 	})
 	if !accepted {
 		// SendAsync refuses only once ctx is done; every other admission failure is a result.
@@ -251,7 +252,7 @@ func (s *Solver) completeFill(
 		)
 		return err
 	}
-	err = completion.result.Err
+	err = lifiReverts.Explain(completion.result.Err)
 	if err == nil {
 		err = errors.Errorf("unknown transaction outcome %q", outcome)
 	}

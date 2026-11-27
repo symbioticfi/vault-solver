@@ -51,12 +51,12 @@ type recoveryVault = liquidlane.Adapter
 // to build each fill plan from current state. Paused / failing / zero-liquidity adapters are dropped;
 // direct legs only. Mirrors readAdapterInventories in inventories.ts.
 func (r *reader) readVaultInventories(
-	ctx context.Context, tokenIn common.Address, vaults []recoveryVault,
+	ctx context.Context, tokenIn common.Address, vaults []recoveryVault, drops liquidlane.DropTrace,
 ) ([]solverInventory, error) {
 	if len(vaults) == 0 {
 		return nil, nil
 	}
-	return r.ll.ReadInventory(ctx, r.ll.RoutesForToken(ctx, vaults, tokenIn))
+	return r.ll.ReadInventory(ctx, r.ll.RoutesForToken(ctx, vaults, tokenIn, drops), drops)
 }
 
 // readQuoteCandidates turns amount-independent inventory into current,
@@ -134,7 +134,7 @@ func (r *reader) readQuoteCandidates(
 			seen[item.ID] = true
 		}
 	}
-	quotes, err := r.ll.ReadPricedFillQuotes(ctx, routes, tokenIn, amountIn)
+	quotes, err := r.ll.ReadPricedFillQuotes(ctx, routes, tokenIn, amountIn, liquidLaneDrops(trace))
 	if err != nil {
 		return nil, err
 	}
@@ -263,17 +263,7 @@ func (r *reader) validateDirectAuthorization(
 	for i := range vaults {
 		routes[i].Adapter = vaults[i].Adapter
 	}
-	authorized, err := r.ll.FilterAuthorizedRoutes(ctx, routes, executor)
-	if err != nil {
-		return err
-	}
-	if missing := liquidlane.UnauthorizedAdapters(routes, authorized); len(missing) > 0 {
-		return errors.Errorf(
-			"executor %s is not authorized as direct filler for configured adapters: %v",
-			executor.Hex(), missing,
-		)
-	}
-	return nil
+	return liquidlane.ValidateDirectAuthorization(ctx, r.ll.FilterAuthorizedRoutes, routes, executor)
 }
 
 // readPermissionedVaultInventories returns the subset of readVaultInventories the executor is
@@ -283,12 +273,13 @@ func (r *reader) validateDirectAuthorization(
 // readPermissionedAdapterInventories in inventories.ts (marketMaker / owner / isFiller). read is the
 // inventory count before the authorization filter.
 func (r *reader) readPermissionedVaultInventories(
-	ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,
+	ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault, trace liquidstrategies.DecisionTrace,
 ) (authorized []solverInventory, read int, err error) {
-	base, err := r.readVaultInventories(ctx, tokenIn, vaults)
+	drops := liquidLaneDrops(trace)
+	base, err := r.readVaultInventories(ctx, tokenIn, vaults, drops)
 	if err != nil || len(base) == 0 {
 		return base, len(base), err
 	}
-	authorized, err = r.ll.FilterAuthorized(ctx, base, executor)
+	authorized, err = r.ll.FilterAuthorized(ctx, base, executor, drops)
 	return authorized, len(base), err
 }

@@ -318,41 +318,84 @@ func TestAuctionsExactRate(t *testing.T) {
 }
 
 func TestRejectAmbiguousOrIncompleteJSON(t *testing.T) {
-	for _, body := range []string{
-		"null", "[] []",
-		"[" + strings.Replace(offerJSON("SUBMITTED"), `"id":12`, `"id":12,"id":13`, 1) + "]",
-		"[" + strings.Replace(offerJSON("SUBMITTED"), `"id":12`, `"id":12.00000001`, 1) + "]",
-		"[" + strings.Replace(offerJSON("SUBMITTED"), `"id":12`, `"id":16777216`, 1) + "]",
-		"[" + strings.Replace(offerJSON("SUBMITTED"), `"id":12`, `"id":"12"`, 1) + "]",
-		"[" + strings.Replace(offerJSON("SUBMITTED"), `"pendingAmount":"0",`, "", 1) + "]",
-		"[" + strings.Replace(offerJSON("SUBMITTED"), `"mintDeadline":null,`, "", 1) + "]",
-		"[" + offerJSON("NEW_STATUS") + "]",
-		"[" + strings.Replace(offerJSON("SUBMITTED"), `"amount":"100"`, `"amount":"0100"`, 1) + "]",
+	offer := offerJSON("SUBMITTED")
+	for _, tc := range []struct{ body, want string }{
+		{"null", "3f offers response is empty"},
+		{"[] []", "trailing JSON response data at byte 4"},
+		{"[" + strings.Replace(offer, `"id":12`, `"id":12,"id":13`, 1) + "]", `duplicate JSON property "id"`},
+		{"[" + strings.Replace(offer, `"id":12`, `"id":12.00000001`, 1) + "]", "JSON id 12.00000001 is not an exact positive integer"},
+		{"[" + strings.Replace(offer, `"id":12`, `"id":16777216`, 1) + "]", "JSON id 16777216 is not an exact positive integer"},
+		{"[" + strings.Replace(offer, `"id":12`, `"id":"12"`, 1) + "]", "JSON id is a string, not a number"},
+		{"[" + strings.Replace(offer, `"pendingAmount":"0",`, "", 1) + "]", `row 0: 3f offer 12 pendingAmount: "" is not a canonical uint256 decimal`},
+		{"[" + strings.Replace(offer, `"mintDeadline":null,`, "", 1) + "]", "3f offer 12 has no mintDeadline field"},
+		{"[" + offerJSON("NEW_STATUS") + "]", `3f offer 12 has unknown status "NEW_STATUS"`},
+		{"[" + strings.Replace(offer, `"amount":"100"`, `"amount":"0100"`, 1) + "]", `3f offer 12 amount: "0100" is not a canonical uint256 decimal`},
 	} {
-		t.Run(body, func(t *testing.T) {
+		t.Run(tc.body, func(t *testing.T) {
 			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(body))
+				_, _ = w.Write([]byte(tc.body))
 			})
-			if _, err := c.Offers(t.Context()); err == nil {
-				t.Fatal("ambiguous or incomplete offers accepted")
+			if _, err := c.Offers(t.Context()); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Offers err = %v, want %q", err, tc.want)
 			}
 		})
 	}
-	for _, body := range []string{
-		"null",
-		`[{"id":34,"requestId":"` + testAccount.Hex() + `","amountRequested":"1","status":"ACTIVE"}]`,
-		`[{"id":34,"requestId":"` + testAccount.Hex() + `","amountRequested":"1","status":"ACTIVE","maxRate":1.1,"maxRate":1.2}]`,
+	for _, tc := range []struct{ body, want string }{
+		{"null", "3f auctions response is empty"},
+		{`[{"id":34,"requestId":"` + testAccount.Hex() + `","amountRequested":"1","status":"ACTIVE"}]`, "3f auction 34 has no maxRate"},
+		{`[{"id":34,"requestId":"` + testAccount.Hex() + `","amountRequested":"1","status":"ACTIVE","maxRate":1.1,"maxRate":1.2}]`, `duplicate JSON property "maxRate"`},
+		{`[{"id":34,"requestId":"0x0","amountRequested":"1","status":"ACTIVE","maxRate":1}]`, `3f auction 34: requestId "0x0" is not a nonzero address`},
+		{`[{"id":34,"requestId":"` + testAccount.Hex() + `","amountRequested":"1.5","status":"ACTIVE","maxRate":1}]`, `3f auction 34 amountRequested: "1.5" is not a canonical uint256 decimal`},
 	} {
-		t.Run(body, func(t *testing.T) {
+		t.Run(tc.body, func(t *testing.T) {
 			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(body))
+				_, _ = w.Write([]byte(tc.body))
 			})
-			if _, err := c.Auctions(t.Context()); err == nil {
-				t.Fatal("ambiguous or incomplete auctions accepted")
+			if _, err := c.Auctions(t.Context()); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Auctions err = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestValidateURLNamesCheckWithoutURL(t *testing.T) {
+	for _, tc := range []struct{ url, want string }{
+		{"ftp://api.example", "scheme is not http or https"},
+		{"https://", "has no host"},
+		{"https://user:secret@api.example", "contains credentials"},
+		{"https://api.example?key=secret", "contains a query"},
+		{"https://api.example#secret", "contains a fragment"},
+		{"https://api.example/secret", "has a path"},
+	} {
+		err := validateURL(tc.url)
+		if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "secret") {
+			t.Errorf("validateURL(%q) = %v, want %q without the URL", tc.url, err, tc.want)
+		}
+	}
+}
+
+func TestUnsignedOfferProblem(t *testing.T) {
+	valid := threef.CreateOfferDto{AuctionId: 34, Maker: strings.ToLower(testBroker.Hex()), Amount: "100", ExpectedReturn: "9", Nonce: "1", Expiration: "4102444800"}
+	if problem := unsignedOfferProblem(valid, testBroker); problem != "" {
+		t.Fatalf("valid offer rejected: %s", problem)
+	}
+	for _, tc := range []struct {
+		edit func(*threef.CreateOfferDto)
+		want string
+	}{
+		{func(d *threef.CreateOfferDto) { d.Nonce = "-1" }, `nonce "-1" is not a nonnegative int64`},
+		{func(d *threef.CreateOfferDto) { d.AuctionId = 0 }, "3f ID 0 must be an exact positive integer below 16777216"},
+		{func(d *threef.CreateOfferDto) { d.Maker = "0x1" }, `maker "0x1" is not broker ` + testBroker.Hex()},
+		{func(d *threef.CreateOfferDto) { d.Amount = "0" }, `amount "0" is not a positive uint256`},
+		{func(d *threef.CreateOfferDto) { d.UseCallback = true }, "useCallback is set"},
+	} {
+		dto := valid
+		tc.edit(&dto)
+		if got := unsignedOfferProblem(dto, testBroker); got != tc.want {
+			t.Errorf("unsignedOfferProblem = %q, want %q", got, tc.want)
+		}
 	}
 }
 

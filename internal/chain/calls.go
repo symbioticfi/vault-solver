@@ -3,6 +3,7 @@ package chain
 import (
 	"context"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -11,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/rpc"
 )
 
 // EstimateGasNextBlock estimates a call against the latest state as if it were included in the block
@@ -114,4 +116,43 @@ func (c *Client) ReadNonces(ctx context.Context, account common.Address) (latest
 		return 0, 0, err
 	}
 	return latestNonce, pendingNonce, nil
+}
+
+// IsBlockOverrideUnsupported recognizes an endpoint that rejects the blockOverrides parameter of
+// eth_estimateGas or eth_call, as opposed to a call that reverts or a transport failure.
+func IsBlockOverrideUnsupported(err error) bool {
+	// A revert ran the call, so the overrides were accepted, whatever its reason text says.
+	if _, reverted := RevertData(err); reverted {
+		return false
+	}
+	var rpcErr rpc.Error
+	if errors.As(err, &rpcErr) && (rpcErr.ErrorCode() == -32602 || rpcErr.ErrorCode() == -32601) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{"too many arguments", "invalid params", "invalid argument", "unknown field"} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// ReplayMinedCall re-executes a mined transaction's call on its parent block's state with the mined
+// block's number and timestamp, so deadline and decay checks see the time it ran at and later
+// transactions in that block do not leak in. Earlier transactions in the block are still missing.
+// An endpoint without blockOverrides support gets a plain parent-state eth_call.
+func (c *Client) ReplayMinedCall(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
+	header, err := c.HeaderByNumber(ctx, block)
+	if err != nil {
+		return nil, errors.Errorf("read block %s header: %w", block, err)
+	}
+	parent := new(big.Int).Sub(block, big.NewInt(1))
+	overrides := map[string]any{"number": (*hexutil.Big)(block), "time": hexutil.Uint64(header.Time)}
+	var result hexutil.Bytes
+	err = c.Client.Client().CallContext(ctx, &result, "eth_call", estimateGasArg(msg), hexutil.EncodeBig(parent), nil, overrides)
+	if err != nil && IsBlockOverrideUnsupported(err) {
+		return c.CallContract(ctx, msg, parent)
+	}
+	return result, err
 }

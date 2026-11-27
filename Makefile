@@ -88,7 +88,7 @@ BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
             ERC20:erc20 Multicall3:multicall3
 # The OEV contracts (Morpho + its AdaptiveCurve IRM + market oracle, RedStone
 # Executor, SymbioticOevSolver), the LI.FI input settler ABI, plus a minimal ERC20
-# (decimals() only) aren't in our default Foundry build, so their ABIs are hand-vendored under
+# (decimals() and the OpenZeppelin draft-IERC6093 token errors, for revert decoding) aren't in our default Foundry build, so their ABIs are hand-vendored under
 # api/abi/ (not in ABIS/CORE_MIRROR_ABIS/refresh-abi). RedStoneExecutor avoids the rfq Executor
 # name clash; solver ERC-20 reads (asset/balanceOf) reuse erc4626, the generic chain.Decimals reader
 # uses erc20.

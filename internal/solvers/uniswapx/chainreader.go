@@ -19,6 +19,10 @@ import (
 
 var uniswapXExecutor = uxexecutor.NewLiquidLaneUniswapXExecutor()
 
+// revertDecoder names LiquidLane and executor errors. The UniswapX reactor's and Permit2's custom
+// errors are not vendored, so they decode as their raw selector.
+var revertDecoder = liquidlane.RevertDecoder(&uxexecutor.LiquidLaneUniswapXExecutorMetaData)
+
 const maxExecutorCallers = 256
 
 type reader struct {
@@ -84,7 +88,8 @@ func (r *reader) validateExecutorCaller(
 func requireExecutorCaller(caller common.Address, results []chain.CallResult) error {
 	for i, result := range results {
 		if !result.Success {
-			return errors.Errorf("executor caller %s is not authorized", caller.Hex())
+			return errors.Errorf("executor caller %s is not authorized: callers(%d) reverted with %s after %d listed callers",
+				caller.Hex(), i, revertDecoder.Describe(result.ReturnData), i)
 		}
 		got, err := uniswapXExecutor.UnpackCallers(result.ReturnData)
 		if err != nil {
@@ -101,16 +106,8 @@ func requireExecutorCaller(caller common.Address, results []chain.CallResult) er
 	)
 }
 
-func (r *reader) unauthorizedAdapters(
-	ctx context.Context,
-	executor common.Address,
-	routes []liquidlane.Route,
-) ([]common.Address, error) {
-	authorized, err := r.snapshots.FilterAuthorizedRoutes(ctx, routes, executor)
-	if err != nil {
-		return nil, err
-	}
-	return liquidlane.UnauthorizedAdapters(routes, authorized), nil
+func (r *reader) validateDirectAuthorization(ctx context.Context, executor common.Address, routes []liquidlane.Route) error {
+	return liquidlane.ValidateDirectAuthorization(ctx, r.snapshots.FilterAuthorizedRoutes, routes, executor)
 }
 
 func (r *reader) validateGasOracles(ctx context.Context, routes []liquidlane.Route) error {

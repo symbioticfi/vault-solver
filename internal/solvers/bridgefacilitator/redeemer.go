@@ -124,6 +124,7 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 		Data:           data,
 		Label:          "redeem",
 		ObserveReceipt: s.metrics.redeemReceiptObserver(len(ready)),
+		RevertDecoder:  reverts,
 	})
 	txmanager.RecordResult(submitCtx, res) // the stage
 	txmanager.RecordResult(ctx, res)       // the redeem pass it belongs to
@@ -136,7 +137,7 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 		return
 	}
 	if !res.Outcome.Included() {
-		err = res.Err
+		err = reverts.Explain(res.Err)
 		if err == nil {
 			err = errors.Errorf("unexpected tx outcome %q", res.Outcome)
 		}

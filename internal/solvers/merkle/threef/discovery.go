@@ -2,6 +2,7 @@ package threef
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"strings"
 
@@ -28,7 +29,7 @@ func verifyPolicyAccount(ctx context.Context, chain provider.Reader, policy, acc
 		return errors.Errorf("3f invalid policy account: %w", err)
 	}
 	if owner != account || owner == (common.Address{}) {
-		return errors.New("3f policy account differs from executor account")
+		return errors.Errorf("3f policy %s account %s differs from executor account %s", policy.Hex(), owner.Hex(), account.Hex())
 	}
 	return nil
 }
@@ -62,9 +63,9 @@ func discoverMarkets(ctx context.Context, chain provider.Reader, pin provider.Sn
 		}
 		metadata := auction.Asset.Get()
 		if metadata == nil {
-			return nil, errors.New("3f auction is missing position manager metadata")
+			return nil, errors.Errorf("3f auction %v has no asset metadata to name its position manager", auction.Id)
 		}
-		manager, err := parse.NonZeroAddress(metadata.PositionManager, "3f position manager")
+		manager, err := parse.NonZeroAddress(metadata.PositionManager, fmt.Sprintf("3f auction %v position manager", auction.Id))
 		if err != nil {
 			return nil, err
 		}
@@ -72,19 +73,25 @@ func discoverMarkets(ctx context.Context, chain provider.Reader, pin provider.Sn
 		if !ok {
 			raw, err := chain.CallContract(ctx, ethereum.CallMsg{To: &manager, Data: positionManagerABI.PackAssets()}, pin.BlockNumber)
 			if err != nil {
-				return nil, errors.Errorf("3f position assets read: %w", err)
+				return nil, errors.Errorf("3f position manager %s assets read: %w", manager.Hex(), err)
 			}
 			assets, err := positionManagerABI.UnpackAssets(raw)
-			if err != nil || assets.CollateralAsset == (common.Address{}) {
-				return nil, errors.New("3f invalid position collateral")
+			if err != nil {
+				return nil, errors.Errorf("3f position manager %s assets: %w", manager.Hex(), err)
+			}
+			if assets.CollateralAsset == (common.Address{}) {
+				return nil, errors.Errorf("3f position manager %s has a zero collateral asset", manager.Hex())
 			}
 			raw, err = chain.CallContract(ctx, ethereum.CallMsg{To: &assets.CollateralAsset, Data: underlyingAssetABI.PackUnderlying()}, pin.BlockNumber)
 			if err != nil {
-				return nil, errors.Errorf("3f collateral underlying read: %w", err)
+				return nil, errors.Errorf("3f collateral %s underlying read: %w", assets.CollateralAsset.Hex(), err)
 			}
 			underlying, err = underlyingAssetABI.UnpackUnderlying(raw)
-			if err != nil || underlying == (common.Address{}) {
-				return nil, errors.New("3f invalid collateral underlying")
+			if err != nil {
+				return nil, errors.Errorf("3f collateral %s underlying: %w", assets.CollateralAsset.Hex(), err)
+			}
+			if underlying == (common.Address{}) {
+				return nil, errors.Errorf("3f collateral %s has a zero underlying", assets.CollateralAsset.Hex())
 			}
 			underlyings[manager] = underlying
 		}

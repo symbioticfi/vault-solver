@@ -72,7 +72,7 @@ func TestRequireExecutorCaller(t *testing.T) {
 				{Success: true, ReturnData: encoded(other)},
 				{Success: false},
 			},
-			wantError: "is not authorized",
+			wantError: "is not authorized: callers(1) reverted with no revert data after 1 listed callers",
 		},
 		{
 			name:      "malformed",

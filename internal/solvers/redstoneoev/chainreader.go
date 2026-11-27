@@ -63,7 +63,8 @@ func (r *reader) ReadExecutorState(ctx context.Context, executorAddr, signer com
 	}
 	for i, call := range []string{"nonces", "deposits", "locked"} {
 		if !res[i].Success {
-			return ExecutorState{}, errors.Errorf("executor %s.%s(%s) reverted", executorAddr.Hex(), call, signer.Hex())
+			return ExecutorState{}, errors.Errorf("executor %s.%s(%s) reverted: %s",
+				executorAddr.Hex(), call, signer.Hex(), revertDecoder.Describe(res[i].ReturnData))
 		}
 	}
 	nonce, err := executorB.UnpackNonces(res[0].ReturnData)

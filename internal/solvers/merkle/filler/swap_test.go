@@ -13,6 +13,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr/funcr"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/erc4626"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -132,6 +133,7 @@ func TestSwapRejectsUnfillableOrders(t *testing.T) {
 		{name: "insufficient capacity", mutate: func(f *swapFixture) { f.discounts.Listed[0].MaxAssets = "489" }, want: "maxAssets 489 below required output 490; split: disabled, order allows 0 route(s)", is: ErrNotFillable},
 		{name: "recipe caller differs", mutate: func(f *swapFixture) { f.chain.RecipeCaller = common.HexToAddress("0x88") }, want: "prepare connector settlement"},
 		{name: "settlement reverts", mutate: func(f *swapFixture) { f.chain.OuterErr = errors.New("execution reverted") }, want: "simulation", is: ErrSimulation, outer: 1},
+		{name: "settlement revert is decoded", mutate: func(f *swapFixture) { f.chain.OuterErr = connectortest.Revert("InvalidSwapRate()") }, want: "(revert InvalidSwapRate())", is: ErrSimulation, outer: 1},
 		{name: "signed terms unavailable", mutate: func(f *swapFixture) { f.discounts.ResolveErr = errors.New("backend timeout") }, want: "backend timeout"},
 		{name: "expires too soon", mutate: func(f *swapFixture) { f.swaps.MinValidity = 200 * 365 * 24 * time.Hour }, want: "expires within", is: ErrNotFillable, outer: 1},
 		{name: "signed discount expires before the order", mutate: func(f *swapFixture) {
@@ -150,6 +152,9 @@ func TestSwapRejectsUnfillableOrders(t *testing.T) {
 		{name: "refused before signing", mutate: func(f *swapFixture) {
 			f.sender.Unsigned, f.sender.SubmitErr = true, errors.New("gas estimation reverted")
 		}, want: "gas estimation", is: ErrSubmission, outer: 1, submits: 1},
+		{name: "gas estimate revert is decoded", mutate: func(f *swapFixture) {
+			f.sender.Unsigned, f.sender.SubmitErr = true, protocolio.Failure("estimate transaction gas", connectortest.Revert("ExpiredSwap()"))
+		}, want: "estimate transaction gas failed: JSON-RPC error rpc_code=3 classification=execution reverted (revert ExpiredSwap())", is: ErrSubmission, outer: 1, submits: 1},
 		{name: "malformed listing", mutate: func(f *swapFixture) { f.discounts.Listed[0].MaxAssets = "many" }, want: "maxAssets"},
 		{name: "discount service down", mutate: func(f *swapFixture) { f.discounts.ListErr = errors.New("unavailable") }, want: "unavailable"},
 	} {

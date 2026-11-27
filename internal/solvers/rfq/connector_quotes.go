@@ -75,7 +75,7 @@ func (r *reader) readConnectorCandidates(
 		// Also require the actual requested-amount oracle read to succeed (including freshness).
 		amountData, err := r.chain.CallContract(ctx, ethereum.CallMsg{To: &item.Adapter, Data: binding.PackGetAmountOut(tokenIn, amountIn)}, block)
 		if err != nil {
-			return nil, errors.Errorf("connector getAmountOut amount: %w", err)
+			return nil, errors.Errorf("connector %s getAmountOut amount: %w", item.Adapter.Hex(), revertDecoder.Explain(err))
 		}
 		gross, err := binding.UnpackGetAmountOut(amountData)
 		if err != nil {

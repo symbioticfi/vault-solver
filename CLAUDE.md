@@ -97,7 +97,14 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
   decision function to mean "rejected": return an error or reason that says why. The shared
   LiquidLane solvers record their declines on `strategies.DecisionTrace`, which is debug-only; a
   caller left without a solution wraps its trace with `RecordDeclines` and puts the last decline in
-  its reason, so the cause reaches production logs with debug off.
+  its reason, so the cause reaches production logs with debug off. A contract revert is part of the
+  reason: every `eth_call`, gas estimate, simulation or failed multicall sub-call that reverts must
+  be decoded before it is logged or returned, so the reason reads `InvalidDiscount()` or
+  `"ERC20: insufficient allowance"`, never a bare `execution reverted`. Pass the error through a
+  `chain.RevertDecoder` built from the integration's contracts (`liquidlane.RevertDecoder(...)` for
+  the LiquidLane solvers). `chain.RevertData` extracts the payload from an RPC error; a failed
+  multicall sub-call's `ReturnData` goes to `Describe`. Set `AllowFailure` on sub-calls whose revert
+  matters: Multicall3 replaces a required sub-call's revert with `Multicall3: call failed`.
 - **Tracing:** spans are started at I/O boundaries, loop ticks, and pipeline stages through
   `observability.NewTracer`. End every span from a `defer` over a named error return, and record
   expected skips with `observability.Decline` plus `end(nil)` rather than an error status. Span names,

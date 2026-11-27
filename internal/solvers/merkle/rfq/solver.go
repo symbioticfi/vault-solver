@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
+	"github.com/symbioticfi/vault-solver/api/bindings/rfq/reactor"
 	"github.com/symbioticfi/vault-solver/api/rfqbackend"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector"
@@ -74,6 +76,7 @@ func New(cfg Config, deps solver.Deps, observeOrderPoll func(time.Time)) (*Solve
 	if err != nil {
 		return nil, err
 	}
+	engine.Workflow.Reverts = connector.RevertDecoder(&executor.ExecutorMetaData, &reactor.ReactorMetaData)
 	return &Solver{Engine: engine, backend: newBackendClient(cfg.BackendURL), tokenPolicy: cfg.TokenPolicy, observeOrderPoll: observeOrderPoll}, nil
 }
 

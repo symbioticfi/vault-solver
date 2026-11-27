@@ -35,7 +35,7 @@ func parseConfig(node yaml.Node) (config, error) {
 	}
 	cfg.Mode = parse.OrDefault(cfg.Mode, "simulate")
 	if cfg.Mode != "simulate" && cfg.Mode != "send" {
-		return config{}, errors.New("threef-merkle mode must be send or simulate")
+		return config{}, errors.Errorf("threef-merkle mode %q must be send or simulate", cfg.Mode)
 	}
 	executor, err := parse.NonZeroAddress(cfg.Executor, "executor")
 	if err != nil {

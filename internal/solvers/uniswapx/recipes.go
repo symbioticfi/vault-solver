@@ -12,6 +12,7 @@ import (
 
 	uxexecutor "github.com/symbioticfi/vault-solver/api/bindings/uniswapx/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/execution"
 	"github.com/symbioticfi/vault-solver/internal/observability"
@@ -38,6 +39,7 @@ func newRecipeSettlement(s *Solver, cfg filler.Config, deps solver.Deps) (*recip
 		return nil, err
 	}
 	lane.MinValidity, lane.Decimals = s.cfg.Discounts.MinimumValidity, s.tokenMetadata.Get
+	lane.Workflow.Reverts = connector.RevertDecoder(&uxexecutor.LiquidLaneUniswapXExecutorMetaData)
 	return &recipeSettlement{s: s, lane: lane}, nil
 }
 

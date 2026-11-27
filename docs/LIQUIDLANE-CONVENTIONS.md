@@ -119,14 +119,20 @@ The shared reader exposes facts:
 
 ```go
 ResolveRoutes(ctx, adapters) ([]Route, error)
-ReadInventory(ctx, routes) ([]Inventory, error)
-ReadFillQuotes(ctx, routes, tokenIn, amountIn) ([]FillQuote, error)
-ReadGasSnapshot(ctx, routes) (*gas.Snapshot, error)
+ReadInventory(ctx, routes, trace ...DropTrace) ([]Inventory, error)
+ReadFillQuotes(ctx, routes, tokenIn, amountIn, trace ...DropTrace) ([]FillQuote, error)
+ReadGasSnapshot(ctx, routes, trace ...DropTrace) (*gas.Snapshot, error)
 ReadAdapterSnapshot(ctx, adapter, filler) (AdapterSnapshot, error)
-ReadAuth(ctx, adapters, filler) ([]Auth, error)
-FilterAuthorized(ctx, inventory, filler) ([]Inventory, error)
-FilterAuthorizedRoutes(ctx, routes, filler) ([]Route, error)
+ReadAuth(ctx, adapters, filler, trace ...DropTrace) ([]Auth, error)
+FilterAuthorized(ctx, inventory, filler, trace ...DropTrace) ([]Inventory, error)
+FilterAuthorizedRoutes(ctx, routes, filler, trace ...DropTrace) ([]Route, error)
 ```
+
+Every route, adapter or gas fact a read leaves out goes to the optional `DropTrace` as a `Drop` naming
+the failed check; a failed sub-call names its decoded revert (`getMaxAssets reverted: InvalidOracle()`).
+Without a trace the reader logs drops at V(1). `ReadAdapterSnapshot` logs every drop at V(1) and puts
+those of an unresolved read in its error; a failed `isFiller` or acquire-balance read only leaves the
+adapter unauthorized or the balance unset.
 
 Implementation rules:
 

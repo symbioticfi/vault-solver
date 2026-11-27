@@ -14,12 +14,17 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/accessmanager"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipecapability"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/merkle-executor/sdk/transaction"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/iris/blm"
+	"github.com/symbioticfi/vault-solver/internal/chain"
 )
 
 var (
@@ -27,6 +32,9 @@ var (
 	blmBinding   = blm.NewIrisBlm()
 	// erc1271Magic is IERC1271.isValidSignature.selector.
 	erc1271Magic = [4]byte{0x16, 0x26, 0xba, 0x7e}
+	// reverts names the errors a sign can revert with: the recipe contracts and the BLM.
+	reverts = chain.RevertDecoderFor(&recipeexecutor.RecipeExecutorMetaData, &merkleaccount.MerkleAccountMetaData,
+		&accessmanager.AccessManagerMetaData, &recipecapability.RecipeCapabilityMetaData, &blm.IrisBlmMetaData)
 )
 
 // declined is a quote the solver chooses not to make. Its reason reaches the borrower
@@ -49,6 +57,11 @@ func (d *declined) Unwrap() error { return d.cause }
 
 func decline(reason string) error { return &declined{venue: "solver", reason: reason} }
 
+// declineWith declines with the failed check and the values it compared.
+func declineWith(reason, format string, args ...any) error {
+	return &declined{venue: "solver", reason: reason, cause: errors.Errorf(format, args...)}
+}
+
 // signBatch is how many markets' signing transactions are simulated at once.
 const signBatch = 5
 
@@ -63,7 +76,7 @@ type candidate struct {
 func (s *Solver) quote(ctx context.Context, r request, indicative bool) (quoteResponse, error) {
 	index := s.markets.Load()
 	if index == nil {
-		return quoteResponse{}, decline("markets_unavailable")
+		return quoteResponse{}, declineWith("markets_unavailable", "market index has not loaded yet")
 	}
 	eligible, err := s.eligibleMarkets(index.candidates(r.CollateralToken, r.DebtToken, r.VenueBitmap), r)
 	if err != nil {
@@ -72,7 +85,7 @@ func (s *Solver) quote(ctx context.Context, r request, indicative bool) (quoteRe
 	// One firm quote at a time, so each one sees the capacity the previous one reserved.
 	if !indicative {
 		if !s.firm.TryLock() {
-			return quoteResponse{}, decline("solver_busy")
+			return quoteResponse{}, declineWith("solver_busy", "another firm quote is being signed")
 		}
 		defer s.firm.Unlock()
 	}
@@ -120,11 +133,11 @@ func (s *Solver) quote(ctx context.Context, r request, indicative bool) (quoteRe
 	// A signature mined after its slot dates the deadline too early for the coordinator, so
 	// nothing is sent once the slot has started.
 	slot := time.Unix(int64(inclusion), 0)
-	if !time.Now().Before(slot) {
-		return quoteResponse{}, decline("slot_missed")
+	if now := time.Now(); !now.Before(slot) {
+		return quoteResponse{}, declineWith("slot_missed", "inclusion slot %d started before send at %d", slot.Unix(), now.Unix())
 	}
 	if !s.sender.LaneReady() {
-		return quoteResponse{}, decline("solver_busy")
+		return quoteResponse{}, declineWith("solver_busy", "transaction lane is occupied")
 	}
 	// Non-strict: past the last moment the response could still be fresh, the manager drops
 	// the request and the signer's next transaction reuses the nonce.
@@ -132,7 +145,7 @@ func (s *Solver) quote(ctx context.Context, r request, indicative bool) (quoteRe
 		To: call.Executor, Data: call.Data, Deadline: slot.Add(s.cfg.Timing.DeadlineWindow), Label: "iris_sign", Solver: Name,
 	})
 	if !accepted {
-		return quoteResponse{}, decline("deadline_missed")
+		return quoteResponse{}, declineWith("deadline_missed", "sign request not accepted: %v", context.Cause(ctx))
 	}
 	var result transaction.Result
 	select {
@@ -140,9 +153,13 @@ func (s *Solver) quote(ctx context.Context, r request, indicative bool) (quoteRe
 	case <-ctx.Done():
 		// The signature may still land: hold its bond until the deadline.
 		s.reserve(q)
-		return quoteResponse{}, decline("signature_pending")
+		return quoteResponse{}, declineWith("signature_pending", "response budget ended before the sign confirmed: %v", context.Cause(ctx))
 	}
 	block, err := signedBlock(result)
+	if result.Reverted() {
+		err = &declined{venue: "solver", reason: "signature_reverted", cause: errors.Errorf("sign tx %s reverted on-chain (%s)",
+			result.Receipt.TxHash.Hex(), s.minedRevert(ctx, call, result.Receipt.BlockNumber))}
+	}
 	if result.Included() && !result.Reverted() || result.Uncertain() {
 		s.reserve(q)
 	}
@@ -156,11 +173,11 @@ func (s *Solver) quote(ctx context.Context, r request, indicative bool) (quoteRe
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
-			return quoteResponse{}, decline("deadline_missed")
+			return quoteResponse{}, declineWith("deadline_missed", "response budget ended while holding the signed quote: %v", context.Cause(ctx))
 		}
 	}
-	if !s.cfg.Timing.fresh(time.Now(), deadline) {
-		return quoteResponse{}, decline("deadline_missed")
+	if now := time.Now(); !s.cfg.Timing.fresh(now, deadline) {
+		return quoteResponse{}, declineWith("deadline_missed", "quote deadline %d is no longer fresh at %d", deadline, now.Unix())
 	}
 	return newQuoteResponse(r, market, q, false), nil
 }
@@ -173,11 +190,11 @@ func signedBlock(result transaction.Result) (*big.Int, error) {
 	case result.Included():
 		return result.Receipt.BlockNumber, nil
 	case result.NotAdmitted && errors.Is(result.Err, context.DeadlineExceeded):
-		return nil, decline("slot_missed")
+		return nil, &declined{venue: "solver", reason: "slot_missed", cause: result.Err}
 	case errors.Is(result.Err, context.DeadlineExceeded):
-		return nil, decline("deadline_missed")
+		return nil, &declined{venue: "solver", reason: "deadline_missed", cause: result.Err}
 	}
-	return nil, errors.Errorf("send sign: %w", result.Err)
+	return nil, errors.Errorf("send sign: %w", reverts.Explain(result.Err))
 }
 
 // prepareCheapest simulates the candidates' signing transactions signBatch at a time, in rate
@@ -208,14 +225,17 @@ func (s *Solver) prepareCheapest(ctx context.Context, candidates []candidate) (c
 func (s *Solver) eligibleMarkets(markets []Market, r request) ([]candidate, error) {
 	var eligible []candidate
 	var lowestAbove *big.Int
-	limited := false
+	var limited error
+	unpriced := 0
 	for _, m := range markets {
 		rate := s.cfg.Pricing.rate(m)
 		switch {
 		case rate == nil:
+			unpriced++
 			continue
 		case r.Debt.Cmp(m.MaxDebt) > 0 || r.Duration.Cmp(m.MaxDuration) > 0:
-			limited = true
+			limited = declineWith("above_market_limits", "market %s: debt %s (max %s) or duration %s (max %s) exceeds the recipe bound",
+				m.DataHash.Hex(), r.Debt, m.MaxDebt, r.Duration, m.MaxDuration)
 			continue
 		case rate.Cmp(m.MinFixedRate) < 0:
 			rate = m.MinFixedRate
@@ -233,11 +253,13 @@ func (s *Solver) eligibleMarkets(markets []Market, r request) ([]candidate, erro
 		slices.SortStableFunc(eligible, func(a, b candidate) int { return a.quote.FixedRate.Cmp(b.quote.FixedRate) })
 		return eligible, nil
 	case lowestAbove != nil:
-		return nil, &declined{venue: "solver", reason: "rate_above_max_fixed_rate", rate: lowestAbove}
-	case limited:
-		return nil, decline("above_market_limits")
+		return nil, &declined{venue: "solver", reason: "rate_above_max_fixed_rate", rate: lowestAbove,
+			cause: errors.Errorf("lowest rate %s exceeds maxFixedRate %s", lowestAbove, r.MaxFixedRate)}
+	case limited != nil:
+		return nil, limited
 	}
-	return nil, decline("no_market")
+	return nil, declineWith("no_market", "%d markets match the collateral, debt token and venues; %d have no configured rate",
+		len(markets), unpriced)
 }
 
 func newQuote(r request, m Market, rate *big.Int) Quote {
@@ -289,7 +311,7 @@ func (s *Solver) preflight(ctx context.Context, candidates []candidate, block *b
 		bond, err := s.postable(c.market, group, stride*i, now)
 		if err == nil && simulate {
 			if result := group.At(stride*i + 3); result.Err != nil {
-				err = &declined{venue: "solver", reason: "recipe_rejected", cause: result.Err}
+				err = &declined{venue: "solver", reason: "recipe_rejected", cause: reverts.Explain(result.Err)}
 			}
 		}
 		if err != nil {
@@ -311,21 +333,21 @@ func (s *Solver) preflight(ctx context.Context, candidates []candidate, block *b
 func (s *Solver) postable(m Market, group *protocolio.ReadResults, offset int, now time.Time) (*big.Int, error) {
 	raw, err := group.At(offset).CallData()
 	if err != nil {
-		return nil, errors.Errorf("read bond requirement: %w", err)
+		return nil, errors.Errorf("read bond requirement: %w", reverts.Explain(err))
 	}
 	requirement, err := blmBinding.UnpackBondRequirement(raw)
 	if err != nil {
 		return nil, errors.Errorf("decode bond requirement: %w", err)
 	}
 	if requirement.Sign() <= 0 {
-		return nil, decline("zero_bond_requirement")
+		return nil, declineWith("zero_bond_requirement", "BLM %s bondRequirement is %s", m.Blm.Hex(), requirement)
 	}
 	bond := padBond(requirement)
 	if limit := s.cfg.Pricing.MaxBond; limit != nil && bond.Cmp(limit) > 0 {
-		return nil, decline("bond_above_limit")
+		return nil, declineWith("bond_above_limit", "padded bond %s exceeds pricing.maxBond %s", bond, limit)
 	}
 	if raw, err = group.At(offset + 1).CallData(); err != nil {
-		return nil, errors.Errorf("read Iris allowance: %w", err)
+		return nil, errors.Errorf("read Iris allowance: %w", reverts.Explain(err))
 	}
 	allowance, err := erc20Binding.UnpackAllowance(raw)
 	if err != nil {
@@ -334,20 +356,22 @@ func (s *Solver) postable(m Market, group *protocolio.ReadResults, offset int, n
 	reserved := s.reserved(m.DebtToken, now)
 	need := new(big.Int).Add(reserved, bond)
 	if allowance.Cmp(need) < 0 {
-		return nil, decline("insufficient_bond_allowance")
+		return nil, declineWith("insufficient_bond_allowance", "account %s Iris allowance %s is below bond %s plus reserved %s",
+			m.Account.Hex(), allowance, bond, reserved)
 	}
 	if reserved.Sign() == 0 {
 		return bond, nil
 	}
 	if raw, err = group.At(offset + 2).CallData(); err != nil {
-		return nil, errors.Errorf("read bond balance: %w", err)
+		return nil, errors.Errorf("read bond balance: %w", reverts.Explain(err))
 	}
 	balance, err := erc20Binding.UnpackBalanceOf(raw)
 	if err != nil {
 		return nil, errors.Errorf("decode bond balance: %w", err)
 	}
 	if balance.Cmp(need) < 0 {
-		return nil, decline("insufficient_bond_balance")
+		return nil, declineWith("insufficient_bond_balance", "account %s balance %s is below bond %s plus reserved %s",
+			m.Account.Hex(), balance, bond, reserved)
 	}
 	return bond, nil
 }
@@ -413,7 +437,7 @@ func (s *Solver) prepareSign(ctx context.Context, m Market, q Quote) (recipes.Ex
 	}
 	call, err := recipes.RouteExecution(ctx, s.chain, snapshot, s.signer, inner)
 	if err != nil {
-		return recipes.ExecutorCall{}, err
+		return recipes.ExecutorCall{}, errors.Errorf("route sign: %w", reverts.Explain(err))
 	}
 	simulate := func(ctx context.Context, request recipes.PreparedBatchSimulationRequest) error {
 		_, err := s.chain.CallContract(ctx, ethereum.CallMsg{From: s.signer, To: &call.Executor, Data: bytes.Clone(call.Data), Gas: request.GasLimit}, request.BlockNumber)
@@ -422,7 +446,7 @@ func (s *Solver) prepareSign(ctx context.Context, m Market, q Quote) (recipes.Ex
 	err = recipes.ValidatePreparedBatchWithSimulation(ctx, s.chain, []recipes.PreparedRecipe{m.prepared},
 		[]recipes.ExecutorCall{{Executor: snapshot.Executor, Data: inner}}, [][]common.Hash{leaves}, snapshot.Caller, simulate, s.maxGas)
 	if err != nil {
-		return recipes.ExecutorCall{}, &declined{venue: "solver", reason: "recipe_rejected", cause: err}
+		return recipes.ExecutorCall{}, &declined{venue: "solver", reason: "recipe_rejected", cause: reverts.Explain(err)}
 	}
 	return call, nil
 }
@@ -432,7 +456,7 @@ func (s *Solver) prepareSign(ctx context.Context, m Market, q Quote) (recipes.Ex
 func (s *Solver) confirm(ctx context.Context, m Market, q Quote, block *big.Int) error {
 	raw, err := s.call(ctx, m.Account, accountBinding.PackIsValidSignature(q.Digest(m.Domain), nil), block)
 	if err != nil {
-		return errors.Errorf("read isValidSignature: %w", err)
+		return errors.Errorf("read isValidSignature: %w", reverts.Explain(err))
 	}
 	magic, err := accountBinding.UnpackIsValidSignature(raw)
 	if err != nil {
@@ -455,4 +479,13 @@ func randomNonce() (*big.Int, error) {
 		return nil, errors.Errorf("draw nonce: %w", err)
 	}
 	return new(big.Int).Add(new(big.Int).SetBytes(b[:]), big.NewInt(1)), nil
+}
+
+// minedRevert replays a reverted sign to name the revert its receipt lacks.
+func (s *Solver) minedRevert(ctx context.Context, call recipes.ExecutorCall, block *big.Int) string {
+	replayer, ok := s.chain.(chain.MinedCallReplayer)
+	if !ok {
+		return "revert reason unavailable: the chain reader cannot replay mined calls"
+	}
+	return reverts.MinedRevert(ctx, replayer, ethereum.CallMsg{From: s.signer, To: &call.Executor, Data: call.Data}, block)
 }

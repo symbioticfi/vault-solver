@@ -150,6 +150,12 @@ removes that candidate before retrying; the loop is bounded by the order deadlin
 chain-time read. A successful alternative does not count as a failed attempt. If all fail, existing
 error classification, retry backoff, and the public preflight-failure breaker apply.
 
+Preflight, gas-estimate and executor-caller reverts are decoded with the LiquidLane core and executor
+ABIs (`liquidlane.RevertDecoder`), so a failure reads `NotCaller()` rather than `execution reverted`.
+A mined revert carries no payload, so the fill request sets `RevertDecoder` and the txmanager replays
+it (see the TXMANAGER plan); the solver only decodes estimate and relay reverts. The UniswapX
+reactor's and Permit2's errors are not vendored and decode as their raw selector.
+
 ### Fill capacity and retries
 
 Every strategy (`default`, `single`, `webhook`) receives physical `capacityLimits` separately from source

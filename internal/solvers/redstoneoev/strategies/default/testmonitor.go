@@ -108,7 +108,7 @@ func (m *testMonitor) refresh(ctx context.Context) {
 		return
 	}
 	morphoAddr, err := m.reader.ReadCallbackMorpho(ctx, m.callback)
-	if err != nil || morphoAddr == (common.Address{}) {
+	if err != nil {
 		observability.Log(ctx).Error(err, "test monitor MORPHO read failed; keeping cache")
 		return
 	}

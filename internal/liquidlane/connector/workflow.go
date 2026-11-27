@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 )
@@ -34,6 +35,9 @@ type Workflow struct {
 	MaxGas         uint64
 	Source         PermissionSource
 	Filler, Signer common.Address
+	// Reverts decodes reverts with the lane's settlement contracts; nil decodes the connector
+	// and recipe contracts only.
+	Reverts *chain.RevertDecoder
 }
 
 // State is the connector identity observed at the recipe snapshot block.
@@ -76,8 +80,13 @@ func (w *Workflow) permissionTree(ctx context.Context, snapshot recipes.Snapshot
 	if err != nil {
 		return nil, errors.Errorf("connector permission tree: %w", err)
 	}
-	if tree.Root != snapshot.Root || tree.ChainID == nil || tree.ChainID.Cmp(w.ChainID) != 0 || tree.Account == nil || *tree.Account != snapshot.Account {
-		return nil, errors.New("connector permission tree scope mismatch")
+	switch {
+	case tree.Root != snapshot.Root:
+		return nil, errors.Errorf("connector permission tree root %s is not the recipe root %s", tree.Root.Hex(), snapshot.Root.Hex())
+	case tree.ChainID == nil || tree.ChainID.Cmp(w.ChainID) != 0:
+		return nil, errors.Errorf("connector permission tree chain %v is not chain %s", tree.ChainID, w.ChainID)
+	case tree.Account == nil || *tree.Account != snapshot.Account:
+		return nil, errors.Errorf("connector permission tree account %v is not the recipe account %s", tree.Account, snapshot.Account.Hex())
 	}
 	return tree, nil
 }
@@ -85,7 +94,8 @@ func (w *Workflow) permissionTree(ctx context.Context, snapshot recipes.Snapshot
 func (w *Workflow) state(ctx context.Context, venue common.Address, block *big.Int) (State, error) {
 	var account, asset common.Address
 	call := func(data []byte) ([]byte, error) {
-		return w.Chain.CallContract(ctx, ethereum.CallMsg{To: &venue, Data: data}, block)
+		raw, err := w.Chain.CallContract(ctx, ethereum.CallMsg{To: &venue, Data: data}, block)
+		return raw, w.Explain(err)
 	}
 	raw, err := call(connectorBinding.PackAccount())
 	if err != nil {
@@ -93,7 +103,7 @@ func (w *Workflow) state(ctx context.Context, venue common.Address, block *big.I
 	}
 	account, err = connectorBinding.UnpackAccount(raw)
 	if err != nil || account == (common.Address{}) {
-		return State{}, errors.New("invalid connector account")
+		return State{}, errors.Errorf("connector %s account %s is invalid (decode: %v)", venue.Hex(), account.Hex(), err)
 	}
 	raw, err = call(connectorBinding.PackOutputAsset())
 	if err != nil {
@@ -101,7 +111,7 @@ func (w *Workflow) state(ctx context.Context, venue common.Address, block *big.I
 	}
 	asset, err = connectorBinding.UnpackOutputAsset(raw)
 	if err != nil || asset == (common.Address{}) {
-		return State{}, errors.New("invalid connector outputAsset")
+		return State{}, errors.Errorf("connector %s outputAsset %s is invalid (decode: %v)", venue.Hex(), asset.Hex(), err)
 	}
 	return State{Account: account, Asset: asset}, nil
 }
@@ -109,6 +119,7 @@ func (w *Workflow) state(ctx context.Context, venue common.Address, block *big.I
 // Each vault may have its own AccessManager. Keep the authenticated on-chain
 // caller in SDK snapshots and batch discovery for recipes sharing that caller.
 func (w *Workflow) discoverRecipes(ctx context.Context, executors []common.Address) ([]recipes.PreparedRecipe, error) {
+	// DiscoverExecutors drops the RPC cause, so its errors carry no revert to decode.
 	identities, err := recipes.DiscoverExecutors(ctx, w.Chain, executors)
 	if err != nil {
 		return nil, err
@@ -131,7 +142,7 @@ func (w *Workflow) discoverRecipes(ctx context.Context, executors []common.Addre
 		}
 		batch, err := recipes.DiscoverBatch(ctx, w.Chain, members, accounts, caller, recipes.PreparationOptions{ChainID: w.ChainID})
 		if err != nil {
-			return nil, err
+			return nil, w.Explain(err)
 		}
 		prepared = append(prepared, batch...)
 	}
@@ -144,8 +155,11 @@ func (w *Workflow) discoverRecipes(ctx context.Context, executors []common.Addre
 // permissions, connector policy budget and advertised capacity must cover the leg. Every recipe
 // is discovered in one pass, so the legs are authenticated against the same recipe state.
 func (w *Workflow) PrepareLegs(ctx context.Context, requests []Request, resolve ResolveDiscount) ([]Prepared, error) {
-	if w.Signer == (common.Address{}) || len(requests) == 0 {
-		return nil, errors.New("connector fill requires a host signer and selected legs")
+	switch {
+	case w.Signer == (common.Address{}):
+		return nil, errors.New("connector fill requires a host signer")
+	case len(requests) == 0:
+		return nil, errors.New("connector fill has no selected legs")
 	}
 	executors := make([]common.Address, 0, len(requests))
 	venues := make(map[common.Address]bool, len(requests))
@@ -153,11 +167,18 @@ func (w *Workflow) PrepareLegs(ctx context.Context, requests []Request, resolve 
 		if request.Executor == (common.Address{}) {
 			return nil, errors.New("connector has no recipe executor")
 		}
-		if request.Venue == (common.Address{}) || venues[request.Venue] || request.DiscountID == (common.Hash{}) || request.MaxAssets == nil || request.MaxAssets.Sign() < 0 {
-			return nil, errors.New("connector requires distinct recipe-derived routing and upstream discounts")
+		switch {
+		case request.Venue == (common.Address{}):
+			return nil, errors.New("connector leg has no connector")
+		case venues[request.Venue]:
+			return nil, errors.Errorf("connector %s appears in more than one leg", request.Venue.Hex())
+		case request.DiscountID == (common.Hash{}):
+			return nil, errors.Errorf("connector %s leg has no upstream discount", request.Venue.Hex())
+		case request.MaxAssets == nil || request.MaxAssets.Sign() < 0:
+			return nil, errors.Errorf("connector %s leg advertised capacity %v is not a non-negative amount", request.Venue.Hex(), request.MaxAssets)
 		}
 		if request.AmountIn == nil || request.AmountIn.Sign() <= 0 {
-			return nil, errors.New("connector fill requires a positive input amount")
+			return nil, errors.Errorf("connector %s leg input %v is not positive", request.Venue.Hex(), request.AmountIn)
 		}
 		venues[request.Venue] = true
 		executors = append(executors, request.Executor)
@@ -174,7 +195,7 @@ func (w *Workflow) PrepareLegs(ctx context.Context, requests []Request, resolve 
 	for _, request := range requests {
 		member, ok := byExecutor[request.Executor]
 		if !ok {
-			return nil, errors.New("connector recipe was not discovered")
+			return nil, errors.Errorf("connector recipe executor %s was not discovered", request.Executor.Hex())
 		}
 		leg, err := w.prepareLeg(ctx, request, member, resolve)
 		if err != nil {
@@ -193,18 +214,18 @@ func (w *Workflow) prepareLeg(ctx context.Context, request Request, member recip
 		return Prepared{}, err
 	}
 	if state.Account != snapshot.Account {
-		return Prepared{}, errors.New("connector account differs from recipe account")
+		return Prepared{}, errors.Errorf("connector %s account %s differs from recipe account %s", request.Venue.Hex(), state.Account.Hex(), snapshot.Account.Hex())
 	}
 	raw, err := w.Chain.CallContract(ctx, ethereum.CallMsg{To: &request.Venue, Data: connectorBinding.PackRemainingAssets(request.TokenIn)}, block)
 	if err != nil {
-		return Prepared{}, errors.Errorf("connector remainingAssets: %w", err)
+		return Prepared{}, errors.Errorf("connector remainingAssets: %w", w.Explain(err))
 	}
 	remaining, err := connectorBinding.UnpackRemainingAssets(raw)
 	if err != nil {
 		return Prepared{}, errors.Errorf("connector remainingAssets decode: %w", err)
 	}
 	if state.Asset != request.TokenOut {
-		return Prepared{}, errors.New("connector outputAsset differs from awarded output")
+		return Prepared{}, errors.Errorf("connector %s outputAsset %s differs from awarded output %s", request.Venue.Hex(), state.Asset.Hex(), request.TokenOut.Hex())
 	}
 	tree, err := w.permissionTree(ctx, snapshot)
 	if err != nil {
@@ -236,7 +257,7 @@ func (w *Workflow) prepareLeg(ctx context.Context, request Request, member recip
 	}
 	routed, err := recipes.RouteExecution(ctx, w.Chain, snapshot, w.Filler, assembled.Calldata)
 	if err != nil {
-		return Prepared{}, err
+		return Prepared{}, w.Explain(err)
 	}
 	return Prepared{
 		Call: routed, Terms: terms, State: state, AmountOut: amountOut,
@@ -250,7 +271,7 @@ func (w *Workflow) prepareLeg(ctx context.Context, request Request, member recip
 func (w *Workflow) payment(ctx context.Context, request Request, terms Terms, block *big.Int) (*big.Int, error) {
 	raw, err := w.Chain.CallContract(ctx, ethereum.CallMsg{To: &request.Venue, Data: connectorBinding.PackGetAmountOut(request.TokenIn, request.AmountIn)}, block)
 	if err != nil {
-		return nil, errors.Errorf("connector getAmountOut: %w", err)
+		return nil, errors.Errorf("connector getAmountOut: %w", w.Explain(err))
 	}
 	gross, err := connectorBinding.UnpackGetAmountOut(raw)
 	if err != nil {
@@ -258,7 +279,7 @@ func (w *Workflow) payment(ctx context.Context, request Request, terms Terms, bl
 	}
 	amount := liquidlane.AmountOutAfterDiscountPrecision(gross, terms.Swap.Discount.Discount, Precision)
 	if amount.Sign() <= 0 {
-		return nil, errors.New("connector pays nothing for the input")
+		return nil, errors.Errorf("connector pays nothing for the input: getAmountOut %s after discount %s", gross, terms.Swap.Discount.Discount)
 	}
 	return amount, nil
 }
@@ -278,5 +299,5 @@ func (w *Workflow) Validate(ctx context.Context, calldata []byte, legs ...Prepar
 		_, err := w.Chain.CallContract(ctx, ethereum.CallMsg{From: w.Signer, To: &w.Filler, Data: bytes.Clone(calldata), Gas: request.GasLimit}, request.BlockNumber)
 		return err
 	}
-	return recipes.ValidatePreparedRoutesWithSimulation(ctx, w.Chain, members, inner, leaves, w.Filler, simulate, w.MaxGas)
+	return w.Explain(recipes.ValidatePreparedRoutesWithSimulation(ctx, w.Chain, members, inner, leaves, w.Filler, simulate, w.MaxGas))
 }

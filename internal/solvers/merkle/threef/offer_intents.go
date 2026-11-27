@@ -1,6 +1,7 @@
 package threef
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
@@ -73,7 +74,7 @@ func matchIntent(previous *intent, offers []threef.OfferDto) (*threef.OfferDto, 
 		offer := &offers[index]
 		if strings.EqualFold(offer.Maker, previous.Account.Hex()) && offer.Nonce == previous.Offer.Nonce && offer.AuctionId == previous.Offer.AuctionId {
 			if matched != nil {
-				return nil, errors.New("multiple 3F offers match intent nonce")
+				return nil, errors.Errorf("multiple 3F offers on auction %v match intent nonce %s", previous.Offer.AuctionId, previous.Offer.Nonce)
 			}
 			matched = offer
 		}
@@ -85,21 +86,36 @@ func matchIntent(previous *intent, offers []threef.OfferDto) (*threef.OfferDto, 
 	if err != nil {
 		return nil, err
 	}
-	if matched.ExecutionMode != "PUSH" || common.HexToAddress(matched.RequestId) != previous.Request || matched.Expiration != previous.Offer.Expiration || (previous.OfferID != 0 && previous.OfferID != id) {
-		return nil, errors.New("3F reconciled offer differs from RAM intent")
+	var differs string
+	switch {
+	case matched.ExecutionMode != "PUSH":
+		differs = fmt.Sprintf("execution mode %.32q is not PUSH", matched.ExecutionMode)
+	case common.HexToAddress(matched.RequestId) != previous.Request:
+		differs = fmt.Sprintf("requestId %.66q differs from intent request %s", matched.RequestId, previous.Request.Hex())
+	case matched.Expiration != previous.Offer.Expiration:
+		differs = fmt.Sprintf("expiration %.80q differs from intent expiration %s", matched.Expiration, previous.Offer.Expiration)
+	case previous.OfferID != 0 && previous.OfferID != id:
+		differs = fmt.Sprintf("offer ID differs from intent offer ID %d", previous.OfferID)
+	}
+	if differs != "" {
+		return nil, errors.Errorf("3F reconciled offer %d for auction %v nonce %s: %s", id, previous.Offer.AuctionId, previous.Offer.Nonce, differs)
 	}
 	amount, err := uintAmount(matched.Amount)
 	if err != nil {
-		return nil, err
+		return nil, errors.Errorf("3F reconciled offer %d amount: %w", id, err)
 	}
 	yield, err := uintAmount(matched.ExpectedReturn)
 	if err != nil {
-		return nil, err
+		return nil, errors.Errorf("3F reconciled offer %d expectedReturn: %w", id, err)
 	}
 	originalAmount, _ := uintAmount(previous.Offer.Amount)
 	originalYield, _ := uintAmount(previous.Offer.ExpectedReturn)
-	if amount.Cmp(originalAmount) > 0 || yield.Cmp(originalYield) > 0 || (matched.Status == "SUBMITTED" && (amount.Cmp(originalAmount) != 0 || yield.Cmp(originalYield) != 0)) {
-		return nil, errors.New("3F reconciled offer terms differ from RAM intent")
+	submitted := matched.Status == "SUBMITTED"
+	switch {
+	case amount.Cmp(originalAmount) > 0 || submitted && amount.Cmp(originalAmount) != 0:
+		return nil, errors.Errorf("3F reconciled %s offer %d amount %s differs from intent amount %s", matched.Status, id, amount, originalAmount)
+	case yield.Cmp(originalYield) > 0 || submitted && yield.Cmp(originalYield) != 0:
+		return nil, errors.Errorf("3F reconciled %s offer %d expectedReturn %s differs from intent expectedReturn %s", matched.Status, id, yield, originalYield)
 	}
 	previous.OfferID = id
 	return matched, nil

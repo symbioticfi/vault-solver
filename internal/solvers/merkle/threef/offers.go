@@ -85,8 +85,8 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 	if err := validateMarket(market); err != nil {
 		return false, err
 	}
-	if len(auctions) > 4096 || len(offers) > 4096 {
-		return false, errors.New("3F offer inventory exceeds 4096-row bound")
+	if len(auctions) > maxRows || len(offers) > maxRows {
+		return false, errors.Errorf("3F offer inventory of %d auctions and %d offers exceeds the %d-row bound", len(auctions), len(offers), maxRows)
 	}
 	byID, err := indexAuctions(auctions)
 	if err != nil {
@@ -127,11 +127,10 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 				return false, errors.Errorf("cancel 3F submitted offer: %w", cancelErr)
 			}
 			if response == nil || response.Status != "CANCELLED" {
-				return false, errors.New("3F cancel did not confirm cancellation")
+				return false, errors.Errorf("3F cancel of offer %d did not confirm cancellation", offer.id)
 			}
-			id, idErr := dtoID(response.Id)
-			if idErr != nil || id != offer.id {
-				return false, errors.New("3F cancel returned a different offer")
+			if id, idErr := dtoID(response.Id); idErr != nil || id != offer.id {
+				return false, errors.Errorf("3F cancel of offer %d returned offer %v", offer.id, response.Id)
 			}
 			observability.Decline(ctx, "offer_cancelled", fmt.Sprintf("offer %d on auction %d: %s", offer.id, offer.auctionID, reason))
 			return true, nil
@@ -217,11 +216,11 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 		}
 		amountText, ok := auction.GetAmountRequestedOk()
 		if !ok || amountText == nil {
-			return false, errors.New("3F auction amountRequested is unavailable")
+			return false, errors.Errorf("3F auction %d has no amountRequested", id)
 		}
 		requested, amountErr := uintAmount(*amountText)
 		if amountErr != nil {
-			return false, errors.Errorf("3F auction amountRequested: %w", amountErr)
+			return false, errors.Errorf("3F auction %d amountRequested: %w", id, amountErr)
 		}
 		amount := minInt(remaining, market.MaxPrincipal, requested)
 		if amount.Sign() <= 0 {
@@ -255,7 +254,7 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 			now = b.Now()
 		}
 		if now.Unix() <= 0 || now.Unix() > int64(^uint64(0)>>1)-300 {
-			return false, errors.New("3F offer clock is invalid")
+			return false, errors.Errorf("3F offer clock %d is outside the valid Unix range", now.Unix())
 		}
 		offer := threef.CreateOfferDto{AuctionId: auction.Id, Maker: strings.ToLower(b.Client.Broker().Hex()), Amount: amount.String(), ExpectedReturn: yield.String(), Nonce: nonce.String(), Expiration: strconv.FormatInt(now.Unix()+300, 10)}
 		created := newIntent(market, request, offer)
@@ -310,7 +309,7 @@ func (b *offerBot) postIntent(ctx context.Context, market offerMarket, pending *
 		return errors.Errorf("3F offer POST outcome unresolved; retained intent for auction %v nonce %s: %w", pending.Offer.AuctionId, pending.Offer.Nonce, err)
 	}
 	if response == nil {
-		return errors.New("3F offer POST outcome unresolved: empty response")
+		return errors.Errorf("3F offer POST outcome unresolved for auction %v nonce %s: empty response", pending.Offer.AuctionId, pending.Offer.Nonce)
 	}
 	pending.OfferID, err = dtoID(response.Id)
 	if err != nil {
@@ -350,12 +349,32 @@ func reserveOffers(m offerMarket, live []liveOffer, pending []*intent) (cash, pa
 }
 
 func validateMarket(m offerMarket) error {
-	if m.ChainID == 0 || m.Account == (common.Address{}) || m.Executor == (common.Address{}) || m.Policy == (common.Address{}) || m.Asset == (common.Address{}) || m.UnderlyingAsset == (common.Address{}) || m.RecipeHash == (common.Hash{}) {
-		return errors.New("3F market identity is incomplete")
+	var missing string
+	switch {
+	case m.ChainID == 0:
+		missing = "chain ID"
+	case m.Account == (common.Address{}):
+		missing = "account"
+	case m.Executor == (common.Address{}):
+		missing = "executor"
+	case m.Policy == (common.Address{}):
+		missing = "policy"
+	case m.Asset == (common.Address{}):
+		missing = "asset"
+	case m.UnderlyingAsset == (common.Address{}):
+		missing = "underlying asset"
+	case m.RecipeHash == (common.Hash{}):
+		missing = "recipe hash"
 	}
-	for _, amount := range []*big.Int{m.Budget, m.MinimumYield1e8, m.MaxPrincipal, m.AvailableCash} {
-		if amount == nil || amount.Sign() < 0 || amount.BitLen() > 256 {
-			return errors.New("3F market quantity must be uint256")
+	if missing != "" {
+		return errors.Errorf("3F market %s is zero", missing)
+	}
+	for _, field := range []struct {
+		name   string
+		amount *big.Int
+	}{{"budget", m.Budget}, {"minimum yield", m.MinimumYield1e8}, {"maxPrincipal", m.MaxPrincipal}, {"available cash", m.AvailableCash}} {
+		if field.amount == nil || field.amount.Sign() < 0 || field.amount.BitLen() > 256 {
+			return errors.Errorf("3F market %s %v is not a uint256", field.name, field.amount)
 		}
 	}
 	return nil
@@ -369,10 +388,10 @@ func indexAuctions(auctions []threef.AuctionDto) (map[uint64]threef.AuctionDto, 
 			return nil, err
 		}
 		if _, exists := indexed[id]; exists {
-			return nil, errors.New("duplicate 3F auction ID")
+			return nil, errors.Errorf("duplicate 3F auction ID %d", id)
 		}
 		if _, err := address(auction.RequestId); err != nil {
-			return nil, err
+			return nil, errors.Errorf("3F auction %d requestId: %w", id, err)
 		}
 		indexed[id] = auction
 	}
@@ -386,7 +405,7 @@ func inventory(maker common.Address, offers []threef.OfferDto, auctions map[uint
 	for _, offer := range offers {
 		owner, err := address(offer.Maker)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, errors.Errorf("3F offer %v maker: %w", offer.Id, err)
 		}
 		if owner != maker {
 			continue
@@ -400,35 +419,43 @@ func inventory(maker common.Address, offers []threef.OfferDto, auctions map[uint
 			return nil, nil, err
 		}
 		if seen[id] {
-			return nil, nil, errors.New("duplicate 3F offer ID")
+			return nil, nil, errors.Errorf("duplicate 3F offer ID %d", id)
 		}
 		seen[id] = true
 		isLive, err := liveStatus(offer.Status)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, errors.Errorf("3F offer %d: %w", id, err)
 		}
 		if offer.Status == "CANCELLED" || offer.Status == "CANCELED" {
 			blocked[auctionID] = true
 		}
-		for _, value := range []string{offer.Amount, offer.ExpectedReturn, offer.Nonce, offer.Expiration, offer.FilledAmount, offer.FilledExpectedReturn, offer.PendingAmount, offer.PendingExpectedReturn} {
-			if _, err := uintAmount(value); err != nil {
-				return nil, nil, errors.Errorf("3F offer quantity: %w", err)
+		for _, field := range []struct{ name, value string }{
+			{"amount", offer.Amount}, {"expectedReturn", offer.ExpectedReturn}, {"nonce", offer.Nonce},
+			{"expiration", offer.Expiration}, {"filledAmount", offer.FilledAmount},
+			{"filledExpectedReturn", offer.FilledExpectedReturn}, {"pendingAmount", offer.PendingAmount},
+			{"pendingExpectedReturn", offer.PendingExpectedReturn},
+		} {
+			if _, err := uintAmount(field.value); err != nil {
+				return nil, nil, errors.Errorf("3F offer %d %s: %w", id, field.name, err)
 			}
 		}
 		if !isLive {
 			continue
 		}
 		if offer.ExecutionMode != "PUSH" {
-			return nil, nil, errors.New("3F default maker has a live non-PUSH offer")
+			return nil, nil, errors.Errorf("3F default maker's live offer %d has execution mode %.32q, want PUSH", id, offer.ExecutionMode)
 		}
 		blocked[auctionID] = true
 		auction, exists := auctions[auctionID]
 		if !exists {
-			return nil, nil, errors.New("live 3F offer has no auction funding-asset binding")
+			return nil, nil, errors.Errorf("live 3F offer %d is on auction %d, which is not listed to bind its funding asset", id, auctionID)
 		}
 		request, err := address(offer.RequestId)
-		if err != nil || request != common.HexToAddress(auction.RequestId) {
-			return nil, nil, errors.New("3F offer request differs from auction")
+		if err != nil {
+			return nil, nil, errors.Errorf("3F offer %d requestId: %w", id, err)
+		}
+		if auctionRequest := common.HexToAddress(auction.RequestId); request != auctionRequest {
+			return nil, nil, errors.Errorf("3F auction %d: requestId %s differs from offer %d requestId %s", auctionID, auctionRequest.Hex(), id, request.Hex())
 		}
 		asset, err := depositAsset(auction)
 		if err != nil {
@@ -437,8 +464,11 @@ func inventory(maker common.Address, offers []threef.OfferDto, auctions map[uint
 		amount, _ := uintAmount(offer.Amount)
 		yield, _ := uintAmount(offer.ExpectedReturn)
 		pending, _ := uintAmount(offer.PendingAmount)
-		if amount.Sign() <= 0 || pending.Cmp(amount) > 0 {
-			return nil, nil, errors.New("3F live offer principal is inconsistent")
+		switch {
+		case amount.Sign() <= 0:
+			return nil, nil, errors.Errorf("live 3F offer %d amount is 0", id)
+		case pending.Cmp(amount) > 0:
+			return nil, nil, errors.Errorf("live 3F offer %d pendingAmount %s exceeds amount %s", id, pending, amount)
 		}
 		// Broadcast/authorized principal excludes historical successful fills.
 		// Before a pending fill appears, reserve the full offer conservatively.
@@ -457,6 +487,6 @@ func liveStatus(status string) (bool, error) {
 	case "SUCCEEDED", "FAILED", "NOT_ACCEPTED", "CANCELLED", "CANCELED", "EXPIRED", "REPAID":
 		return false, nil
 	default:
-		return false, errors.Errorf("unknown 3F offer status %q", status)
+		return false, errors.Errorf("unknown 3F offer status %.32q", status)
 	}
 }

@@ -91,7 +91,7 @@ func unresolvedEstimateDiagnosticCount(logs []string) int {
 	count := 0
 	for _, entry := range logs {
 		if strings.Contains(entry, "fatal fill estimate unresolved at order deadline") &&
-			strings.Contains(entry, `"error"`) && strings.Contains(entry, `"revert":"InvalidFiller"`) {
+			strings.Contains(entry, `"error"`) && strings.Contains(entry, `"revert":"InvalidFiller()"`) {
 			count++
 		}
 	}

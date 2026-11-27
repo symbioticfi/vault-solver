@@ -3,8 +3,34 @@ package defaultstrategy
 import (
 	"testing"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+
+	"github.com/symbioticfi/vault-solver/api/bindings/oev/callback"
+	"github.com/symbioticfi/vault-solver/internal/chain"
 )
+
+func TestCallOutcomeDecodesReverts(t *testing.T) {
+	str, _ := abi.NewType("string", "", nil)
+	reason, err := abi.Arguments{{Type: str}}.Pack("market not created")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		res  chain.CallResult
+		want string
+	}{
+		{chain.CallResult{Success: true}, "ok"},
+		{chain.CallResult{ReturnData: append([]byte{0x08, 0xc3, 0x79, 0xa0}, reason...)}, `reverted: "market not created"`},
+		{chain.CallResult{ReturnData: callback.SymbioticOevSolverNotMorphoErrorID().Bytes()[:4]}, "reverted: NotMorpho()"},
+		{chain.CallResult{}, "reverted: no revert data"},
+	}
+	for _, tc := range tests {
+		if got := callOutcome(tc.res); got != tc.want {
+			t.Errorf("callOutcome = %q, want %q", got, tc.want)
+		}
+	}
+}
 
 func TestVerifyAdapterPair(t *testing.T) {
 	loan := common.HexToAddress("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")

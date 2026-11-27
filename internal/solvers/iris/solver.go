@@ -437,6 +437,11 @@ func (s *Solver) serve(ctx context.Context, body quoteRequest, indicative bool) 
 		var refused *declined
 		if errors.As(err, &refused) {
 			observability.Decline(ctx, "declined", refused.Error())
+			log := observability.Log(ctx)
+			if indicative {
+				log = log.V(1)
+			}
+			log.Info("iris quote declined", "requestId", body.RequestID, "indicative", indicative, "reason", refused.Error())
 			end(nil)
 			return
 		}

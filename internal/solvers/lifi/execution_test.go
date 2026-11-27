@@ -1262,6 +1262,48 @@ func TestCompleteFillTreatsIncludedTransactionAsSuccess(t *testing.T) {
 	}
 }
 
+func TestCompleteFillDecodesReverts(t *testing.T) {
+	notCaller := notCallerRevert(t)
+	tests := []struct {
+		name   string
+		result txmanager.Result
+		want   string
+	}{
+		{
+			name: "gas estimate revert",
+			result: txmanager.Result{Outcome: txmanager.OutcomeSubmissionError, Err: errors.Errorf(
+				"estimate gas %q: %w", "lifi-fill", &txmanager.ExecutionRevertError{Data: notCaller, Cause: errors.New("execution reverted")})},
+			want: `estimate gas "lifi-fill": execution reverted (revert NotCaller())`,
+		},
+		{
+			name: "mined revert keeps the txmanager replay reason",
+			result: txmanager.Result{
+				Outcome: txmanager.OutcomeReverted,
+				Err:     errors.New("tx 0xc reverted on-chain (replay of block 7 reverted with NotCaller())"),
+			},
+			want: "tx 0xc reverted on-chain (replay of block 7 reverted with NotCaller())",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var logs []string
+			solver := &Solver{
+				log:    funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
+				reader: fakeLifiReader{},
+			}
+			fill := &pendingFill{
+				order:   &submittedOrder{OrderID: "order-1", QuoteID: "quote-1"},
+				orderID: common.HexToHash("0x1"), reservationKey: "order-1",
+			}
+			pending := &pendingFillState{byOrder: map[string]*pendingFill{"order-1": fill}}
+			err := solver.completeFill(solverContext(t, solver), pending, fillCompletion{fill: fill, result: tt.result})
+			if err == nil || !strings.Contains(err.Error(), tt.want) || !strings.Contains(strings.Join(logs, "\n"), "NotCaller()") {
+				t.Fatalf("completeFill error = %v, want %q; logs=%s", err, tt.want, logs)
+			}
+		})
+	}
+}
+
 func TestOrderWorkerUncertainNonceReleasesReservationWithoutSuccess(t *testing.T) {
 	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeAbandoned} {
 		t.Run(string(outcome), func(t *testing.T) { orderWorkerUncertainNonceReleasesReservationWithoutSuccess(t, outcome) })

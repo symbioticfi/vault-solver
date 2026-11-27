@@ -38,15 +38,15 @@ func ParseDiscount(r *discounts.Resolved, id common.Hash, venue, token common.Ad
 	}
 	rawID, err := hexutil.Decode(r.DiscountID)
 	if err != nil || len(rawID) != 32 || common.BytesToHash(rawID) != id {
-		return Terms{}, errors.New("connector discount id does not match selected route")
+		return Terms{}, errors.Errorf("connector discount id %q does not match selected route %s", r.DiscountID, id.Hex())
 	}
 	a, err := parse.NonZeroAddress(r.Discount.Adapter, "connector adapter")
 	if err != nil || a != venue {
-		return Terms{}, errors.New("connector discount route mismatch")
+		return Terms{}, errors.Errorf("connector discount route mismatch: adapter %q is not connector %s", r.Discount.Adapter, venue.Hex())
 	}
 	out.Discount.TokenToRedeem, err = parse.NonZeroAddress(r.Discount.TokenToRedeem, "tokenToRedeem")
 	if err != nil || out.Discount.TokenToRedeem != token {
-		return Terms{}, errors.New("connector discount route mismatch")
+		return Terms{}, errors.Errorf("connector discount route mismatch: tokenToRedeem %q is not input %s", r.Discount.TokenToRedeem, token.Hex())
 	}
 	out.Discount.Signer, err = parse.NonZeroAddress(r.Discount.Signer, "signer")
 	if err != nil {

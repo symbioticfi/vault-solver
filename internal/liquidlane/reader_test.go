@@ -65,9 +65,9 @@ func TestReaderResolveAdaptersFailsClosedForConfiguredAdapterMetadata(t *testing
 		want    string
 	}{
 		"vault call": {
-			results: [][]chain.CallResult{{{}}},
+			results: [][]chain.CallResult{{revertedWith(t, "InvalidVault()")}},
 			dec:     fixedDecimals{},
-			want:    "vault: call failed",
+			want:    "vault reverted: InvalidVault()",
 		},
 		"vault decode": {
 			results: [][]chain.CallResult{{{Success: true, ReturnData: []byte{0xff}}}},
@@ -85,7 +85,7 @@ func TestReaderResolveAdaptersFailsClosedForConfiguredAdapterMetadata(t *testing
 				{{}},
 			},
 			dec:  fixedDecimals{},
-			want: "asset: call failed",
+			want: "asset reverted: no revert data",
 		},
 		"asset decode": {
 			results: [][]chain.CallResult{
@@ -144,7 +144,7 @@ func TestReaderDiscoverAdaptersSkipsInvalidMetadata(t *testing.T) {
 			dec := decimalsReader(fixedDecimals{good.TokenOut: 6, bad.TokenOut: 18})
 			switch stage {
 			case "vault":
-				vaults[1] = chain.CallResult{}
+				vaults[1] = revertedWith(t, "InvalidVault()")
 				assets = assets[:1]
 			case "asset":
 				assets[1] = chain.CallResult{}
@@ -153,9 +153,15 @@ func TestReaderDiscoverAdaptersSkipsInvalidMetadata(t *testing.T) {
 			}
 			backend := &scriptedLiquidLaneBackend{latest: [][]chain.CallResult{vaults, assets}}
 			r := &Reader{chain: backend, log: logr.Discard(), dec: dec}
-			resolved, err := r.DiscoverAdapters(t.Context(), []common.Address{good.Adapter, bad.Adapter, good.Adapter})
+			var drops []Drop
+			resolved, err := r.DiscoverAdapters(t.Context(), []common.Address{good.Adapter, bad.Adapter, good.Adapter},
+				func(d Drop) { drops = append(drops, d) })
 			if err != nil || len(resolved) != 1 || resolved[0].Adapter != good.Adapter || resolved[0].Vault != good.Vault || resolved[0].TokenOutDecimals != 6 {
 				t.Fatalf("discovery = %+v, error = %v", resolved, err)
+			}
+			want := map[string]string{"vault": "vault reverted: InvalidVault()", "asset": "asset reverted", "decimals": "decimals unavailable"}[stage]
+			if len(drops) != 1 || drops[0].Adapter != bad.Adapter || !strings.Contains(drops[0].Reason, want) {
+				t.Fatalf("drops = %+v, want one for %s containing %q", drops, bad.Adapter.Hex(), want)
 			}
 			if len(backend.latest) != 0 {
 				t.Fatal("discovery did not use the batched metadata reads")
@@ -182,7 +188,7 @@ func TestReaderResolveRoutesFailsClosedForConfiguredAdapterRoutes(t *testing.T) 
 		"length call": {
 			results: baseResults([]chain.CallResult{{}}),
 			dec:     fixedDecimals{route.TokenOut: route.TokenOutDecimals},
-			want:    "tokensToRedeem length: call failed",
+			want:    "getTokensToRedeemLength reverted: no revert data",
 		},
 		"length decode": {
 			results: baseResults([]chain.CallResult{{Success: true, ReturnData: []byte{0xff}}}),
@@ -209,7 +215,7 @@ func TestReaderResolveRoutesFailsClosedForConfiguredAdapterRoutes(t *testing.T) 
 				[]chain.CallResult{{}},
 			),
 			dec:  fixedDecimals{route.TokenOut: route.TokenOutDecimals},
-			want: "tokensToRedeem[0]: call failed",
+			want: "tokensToRedeem(0) reverted: no revert data",
 		},
 		"token decode": {
 			results: baseResults(
@@ -283,7 +289,7 @@ func TestReaderReadInventoryUsesLatestAndFailsClosedPerRoute(t *testing.T) {
 		successOutput(t, "getMaxAssets", big.NewInt(300)),
 		successOutput(t, "getAmountOut", new(big.Int).Add(price, big.NewInt(1_000_000))),
 	)...)
-	results = append(results, route(successOutput(t, "getMaxAssets", big.NewInt(400)), chain.CallResult{})...)
+	results = append(results, route(successOutput(t, "getMaxAssets", big.NewInt(400)), revertedWith(t, "InvalidOracle()"))...)
 	backend := &scriptedLiquidLaneBackend{latest: [][]chain.CallResult{results}}
 	r := &Reader{
 		chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111,
@@ -291,13 +297,15 @@ func TestReaderReadInventoryUsesLatestAndFailsClosedPerRoute(t *testing.T) {
 	}
 	routes := []Route{testReaderRoute(1), testReaderRoute(2), testReaderRoute(3), testReaderRoute(4)}
 
-	inventory, err := r.ReadInventory(context.Background(), routes)
+	var drops []Drop
+	inventory, err := r.ReadInventory(context.Background(), routes, func(d Drop) { drops = append(drops, d) })
 	if err != nil {
 		t.Fatalf("ReadInventory: %v", err)
 	}
 	if len(inventory) != 1 || inventory[0].ID != routes[0].ID {
 		t.Fatalf("inventory = %+v", inventory)
 	}
+	assertDrops(t, drops, routes[1:], "getMaxAssets: ", "does not match oracle price", "getAmountOut(price probe) reverted: InvalidOracle()")
 	if inventory[0].MaxRate.String() != "1000000000000000000" ||
 		inventory[0].AdapterMinDiscount.String() != "100000" || inventory[0].Price.Cmp(price) != 0 {
 		t.Fatalf("executable inventory = %+v", inventory[0])
@@ -369,11 +377,12 @@ func TestReaderReadPricedFillQuotesChecksOraclePriceAgainstOrderQuote(t *testing
 		outDecimals       int
 		gross, probePrice int64
 		wantPrice         int64
+		wantDrop          string
 	}{
-		{"matching probe", 6, 13, 1_900_000_000_000_000_000, 1_900_000_000_000_000_000},
-		{"inconsistent probe", 6, 13, 1_000_000_000_000_000_000, 0},
-		{"failed probe", 6, 13, 0, 0},
-		{"price identified by order quote", 25, 210, 0, 3},
+		{"matching probe", 6, 13, 1_900_000_000_000_000_000, 1_900_000_000_000_000_000, ""},
+		{"inconsistent probe", 6, 13, 1_000_000_000_000_000_000, 0, "oracle price 1000000000000000000 pays 7 for amountIn 7, getAmountOut pays 13"},
+		{"failed probe", 6, 13, 0, 0, "getAmountOut(price probe) reverted: no revert data"},
+		{"price identified by order quote", 25, 210, 0, 3, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			route := testReaderRoute(1)
@@ -389,9 +398,14 @@ func TestReaderReadPricedFillQuotesChecksOraclePriceAgainstOrderQuote(t *testing
 				successOutput(t, "minDiscount", big.NewInt(7_000)),
 				probe,
 			}}}}
-			quotes, err := r.ReadPricedFillQuotes(t.Context(), []Route{route}, route.TokenIn, big.NewInt(7))
+			var drops []Drop
+			quotes, err := r.ReadPricedFillQuotes(t.Context(), []Route{route}, route.TokenIn, big.NewInt(7),
+				func(d Drop) { drops = append(drops, d) })
 			if err != nil {
 				t.Fatalf("ReadPricedFillQuotes: %v", err)
+			}
+			if tc.wantDrop != "" {
+				assertDrops(t, drops, []Route{route}, tc.wantDrop)
 			}
 			if tc.wantPrice == 0 {
 				if len(quotes) != 0 {
@@ -685,13 +699,15 @@ func TestReaderFilterAuthorizedRoutesDropsUnauthorizedAdapters(t *testing.T) {
 	}}
 	r := &Reader{chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111}
 
-	got, err := r.FilterAuthorizedRoutes(context.Background(), routes, filler)
+	var drops []Drop
+	got, err := r.FilterAuthorizedRoutes(context.Background(), routes, filler, func(d Drop) { drops = append(drops, d) })
 	if err != nil {
 		t.Fatalf("FilterAuthorizedRoutes: %v", err)
 	}
 	if len(got) != 1 || got[0].ID != routes[0].ID {
 		t.Fatalf("authorized routes = %+v", got)
 	}
+	assertDrops(t, drops, routes[1:], "filler "+filler.Hex()+" is not marketMaker "+marketMaker.Hex())
 }
 
 func TestReaderFilterAuthorizedRoutesAcceptsAdapterOnlyEntries(t *testing.T) {
