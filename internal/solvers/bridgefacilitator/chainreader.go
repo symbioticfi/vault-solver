@@ -92,7 +92,8 @@ func newReader(c *chain.Client, lens common.Address) *reader {
 	return &reader{chain: c, lens: lens}
 }
 
-// multicall names the revert when the whole batch reverts, as it does when a required sub-call fails.
+// multicall names the revert when the whole batch reverts. Sub-calls whose revert matters set
+// AllowFailure: a required sub-call that fails makes Multicall3 replace its revert with its own.
 func (r *reader) multicall(ctx context.Context, calls []chain.Call) ([]chain.CallResult, error) {
 	res, err := r.chain.Multicall(ctx, calls)
 	return res, reverts.Explain(err)
@@ -101,7 +102,7 @@ func (r *reader) multicall(ctx context.Context, calls []chain.Call) ([]chain.Cal
 // factoryAdapters returns a bounded factory entity snapshot in registry order. The registry is
 // append-only, so totalEntities followed by a batched entity(i) read is a consistent enumeration.
 func (r *reader) factoryAdapters(ctx context.Context, factory common.Address) ([]common.Address, error) {
-	res, err := r.multicall(ctx, []chain.Call{{Target: factory, Data: factoryB.PackTotalEntities()}})
+	res, err := r.multicall(ctx, []chain.Call{{Target: factory, Data: factoryB.PackTotalEntities(), AllowFailure: true}})
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +126,7 @@ func (r *reader) factoryAdapters(ctx context.Context, factory common.Address) ([
 
 	calls := make([]chain.Call, count)
 	for i := range calls {
-		calls[i] = chain.Call{Target: factory, Data: factoryB.PackEntity(big.NewInt(int64(i)))}
+		calls[i] = chain.Call{Target: factory, Data: factoryB.PackEntity(big.NewInt(int64(i))), AllowFailure: true}
 	}
 	res, err = r.multicall(ctx, calls)
 	if err != nil {
@@ -294,16 +295,16 @@ type exposureState struct {
 func (r *reader) liquidityAndExposure(ctx context.Context, adapterAddr common.Address) (exposureState, error) {
 	// getMaxAssets headroom comes from the lens when configured (it models the delegator's cross-adapter
 	// deallocation cascade, which the adapter's own getter overstates); otherwise from the adapter itself.
-	maxAssetsCall := chain.Call{Target: adapterAddr, Data: bfAdapter.PackGetMaxAssets()}
+	maxAssetsCall := chain.Call{Target: adapterAddr, Data: bfAdapter.PackGetMaxAssets(), AllowFailure: true}
 	if r.lens != (common.Address{}) {
-		maxAssetsCall = chain.Call{Target: r.lens, Data: lensB.PackGetMaxAssets(adapterAddr)}
+		maxAssetsCall = chain.Call{Target: r.lens, Data: lensB.PackGetMaxAssets(adapterAddr), AllowFailure: true}
 	}
 	calls := []chain.Call{
 		maxAssetsCall,
-		{Target: adapterAddr, Data: bfAdapter.PackMinYieldPerRequest()},
-		{Target: adapterAddr, Data: bfAdapter.PackMinAssetsPerRequest()},
-		{Target: adapterAddr, Data: bfAdapter.PackMaxAssetsPerRequest()},
-		{Target: adapterAddr, Data: bfAdapter.PackRequestsLength()},
+		{Target: adapterAddr, Data: bfAdapter.PackMinYieldPerRequest(), AllowFailure: true},
+		{Target: adapterAddr, Data: bfAdapter.PackMinAssetsPerRequest(), AllowFailure: true},
+		{Target: adapterAddr, Data: bfAdapter.PackMaxAssetsPerRequest(), AllowFailure: true},
+		{Target: adapterAddr, Data: bfAdapter.PackRequestsLength(), AllowFailure: true},
 	}
 	res, err := r.multicall(ctx, calls)
 	if err != nil {
@@ -417,7 +418,7 @@ func collectRequests(res []chain.CallResult, expected int) ([]common.Address, []
 // single multicall. The gaps name every requested slot or canWithdraw result that was missing or
 // undecodable; valid results are returned even when there are gaps.
 func (r *reader) readyToRedeem(ctx context.Context, adapterAddr common.Address) ([]common.Address, []string, error) {
-	lres, err := r.multicall(ctx, []chain.Call{{Target: adapterAddr, Data: bfAdapter.PackRequestsLength()}})
+	lres, err := r.multicall(ctx, []chain.Call{{Target: adapterAddr, Data: bfAdapter.PackRequestsLength(), AllowFailure: true}})
 	if err != nil {
 		return nil, nil, err
 	}

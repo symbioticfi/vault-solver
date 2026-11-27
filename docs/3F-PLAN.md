@@ -129,7 +129,8 @@ event contains only the finalized request address.
 
 Reverts are decoded with the 3F adapter, adapter factory, lens and VaultV2 ABIs (`reverts` in
 `chainreader.go`): failed multicall reads, the redeem gas estimate, and a mined redeem revert, which the
-request's `RevertDecoder` lets the txmanager replay and name. 3F API rejections name the field and value
+request's `RevertDecoder` lets the txmanager replay and name. Every reader sub-call sets `AllowFailure`,
+because a required sub-call that fails makes Multicall3 replace its revert with `Multicall3: call failed`. 3F API rejections name the field and value
 that failed validation, never the response body, URL or key.
 
 An occupied local transaction lane pauses new 3F commitments: offer

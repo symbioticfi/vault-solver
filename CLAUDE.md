@@ -102,8 +102,9 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
   be decoded before it is logged or returned, so the reason reads `InvalidDiscount()` or
   `"ERC20: insufficient allowance"`, never a bare `execution reverted`. Pass the error through a
   `chain.RevertDecoder` built from the integration's contracts (`liquidlane.RevertDecoder(...)` for
-  the LiquidLane solvers); `chain.RevertData` extracts the payload, including from multicall
-  return data.
+  the LiquidLane solvers). `chain.RevertData` extracts the payload from an RPC error; a failed
+  multicall sub-call's `ReturnData` goes to `Describe`. Set `AllowFailure` on sub-calls whose revert
+  matters: Multicall3 replaces a required sub-call's revert with `Multicall3: call failed`.
 - **Tracing:** spans are started at I/O boundaries, loop ticks, and pipeline stages through
   `observability.NewTracer`. End every span from a `defer` over a named error return, and record
   expected skips with `observability.Decline` plus `end(nil)` rather than an error status. Span names,

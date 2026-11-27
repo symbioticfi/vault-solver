@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/symbioticfi/vault-solver/api/bindings/multicall3"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 )
 
@@ -500,8 +501,8 @@ func TestProbeRejection(t *testing.T) {
 	}
 }
 
-// A required sub-call failure reverts the whole aggregate3; the reader names that revert.
-func TestReaderMulticallNamesBatchRevert(t *testing.T) {
+// A failed sub-call keeps its own revert, which the reader names.
+func TestReaderMulticallNamesSubCallRevert(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -518,8 +519,14 @@ func TestReaderMulticallNamesBatchRevert(t *testing.T) {
 			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%v,"result":"0x1"}`, marshalID(req.ID))
 			return
 		}
-		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%v,"error":{"code":3,"message":"execution reverted","data":"0x%x"}}`,
-			marshalID(req.ID), bfAdapter.GetABI().Errors["TooManyRequests"].ID.Bytes()[:4])
+		results := make([]multicall3.Multicall3Result, 5)
+		results[0].ReturnData = bfAdapter.GetABI().Errors["TooManyRequests"].ID.Bytes()[:4]
+		encoded, err := multicall3.NewMulticall3().GetABI().Methods["aggregate3"].Outputs.Pack(results)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%v,"result":"0x%x"}`, marshalID(req.ID), encoded)
 	}))
 	defer srv.Close()
 	c, err := chain.Dial(t.Context(), []string{srv.URL}, "", "0x0000000000000000000000000000000000000001", 20*time.Second)
@@ -528,7 +535,7 @@ func TestReaderMulticallNamesBatchRevert(t *testing.T) {
 	}
 
 	_, err = newReader(c, common.Address{}).liquidityAndExposure(t.Context(), common.HexToAddress("0xa0"))
-	if err == nil || !strings.Contains(err.Error(), "(revert TooManyRequests())") {
-		t.Fatalf("err = %v, want the decoded batch revert", err)
+	if err == nil || !strings.Contains(err.Error(), "sub-call 0 reverted: TooManyRequests()") {
+		t.Fatalf("err = %v, want the decoded sub-call revert", err)
 	}
 }
